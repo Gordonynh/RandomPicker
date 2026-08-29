@@ -1,0 +1,143 @@
+<ci:SettingsPageBase xmlns="https://github.com/avaloniaui"
+                     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                     xmlns:ci="http://classisland.tech/schemas/xaml/core"
+                     xmlns:controls="clr-namespace:FluentAvalonia.UI.Controls;assembly=FluentAvalonia"
+                     x:Class="ClassIsland.RandomPicker.Views.PickerSettingsPage">
+    <ScrollViewer>
+        <StackPanel Classes="settings-container animated-intro">
+
+            <TextBlock Classes="l-instructive" TextWrapping="Wrap"
+                       Text="日常操作在悬浮窗右键菜单。此页配置拍照抽人：拍摄合影，从中随机抽取一人。"/>
+
+            <Separator Margin="0 12 0 4"/>
+            <ci:IconText Glyph="&#xE8A5;" Text="名单" Margin="0 0 0 4"/>
+
+            <controls:SettingsExpander IconSource="{ci:FluentIconSource &#xE8A5;}"
+                                       Header="名单文件"
+                                       Description="{Binding RosterSummary}">
+                <controls:SettingsExpander.Footer>
+                    <Button Click="OnOpenRoster">
+                        <ci:IconText Glyph="&#xE8E5;" Text="打开"/>
+                    </Button>
+                </controls:SettingsExpander.Footer>
+            </controls:SettingsExpander>
+
+            <Separator Margin="0 12 0 4"/>
+            <ci:IconText Glyph="&#xE722;" Text="拍照抽人" Margin="0 0 0 4"/>
+
+            <TextBlock Classes="l-instructive" TextWrapping="Wrap"
+                       Text="⚠ 仅能检测正对镜头的人脸，背对镜头者无法抽中。建议先用「试拍一次」验证效果。"/>
+
+            <controls:SettingsExpander IconSource="{ci:FluentIconSource &#xE722;}"
+                                       Header="试拍一次"
+                                       Description="{Binding ShotSummary}">
+                <controls:SettingsExpander.Footer>
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Button Click="OnRefreshCameras">
+                            <ci:IconText Glyph="&#xE117;" Text="刷新摄像头"/>
+                        </Button>
+                        <Button Click="OnTestShot" IsEnabled="{Binding CanShoot}">
+                            <ci:IconText Glyph="&#xE722;" Text="试拍一次"/>
+                        </Button>
+                    </StackPanel>
+                </controls:SettingsExpander.Footer>
+            </controls:SettingsExpander>
+
+            <Border CornerRadius="8" ClipToBounds="True" Margin="0 4 0 0"
+                    IsVisible="{Binding HasPreview}">
+                <Image Source="{Binding Preview}" MaxHeight="420" Stretch="Uniform"/>
+            </Border>
+
+            <controls:SettingsExpander IconSource="{ci:FluentIconSource &#xE960;}"
+                                       Header="摄像头"
+                                       Description="{Binding CameraSummary}">
+                <controls:SettingsExpander.Footer>
+                    <ComboBox MinWidth="240" ItemsSource="{Binding CameraNames}"
+                              SelectedIndex="{Binding CameraIndex, Mode=TwoWay}"/>
+                </controls:SettingsExpander.Footer>
+            </controls:SettingsExpander>
+
+            <controls:SettingsExpander IconSource="{ci:FluentIconSource &#xE916;}"
+                                       Header="摄像头保持开启"
+                                       Description="{Binding KeepAliveSummary}">
+                <controls:SettingsExpander.Footer>
+                    <StackPanel Orientation="Horizontal" Spacing="10" VerticalAlignment="Center">
+                        <Slider Width="160" Minimum="0" Maximum="600" TickFrequency="10"
+                                IsSnapToTickEnabled="True" VerticalAlignment="Center"
+                                Value="{Binding KeepAlive, Mode=TwoWay}"/>
+                        <TextBlock VerticalAlignment="Center" MinWidth="70"
+                                   Text="{Binding KeepAliveText}"/>
+                        <Button Click="OnCloseCamera">
+                            <ci:IconText Glyph="&#xE711;" Text="立刻关闭"/>
+                        </Button>
+                    </StackPanel>
+                </controls:SettingsExpander.Footer>
+            </controls:SettingsExpander>
+
+            <controls:SettingsExpander IconSource="{ci:FluentIconSource &#xE71E;}"
+                                       Header="检测阈值"
+                                       Description="调低可检测到更多人，也更易误检。">
+                <controls:SettingsExpander.Footer>
+                    <StackPanel Orientation="Horizontal" Spacing="10" VerticalAlignment="Center">
+                        <Slider Width="160" Minimum="0.05" Maximum="0.95" TickFrequency="0.05"
+                                IsSnapToTickEnabled="True" VerticalAlignment="Center"
+                                Value="{Binding Threshold, Mode=TwoWay}"/>
+                        <TextBlock VerticalAlignment="Center" MinWidth="54"
+                                   Text="{Binding ThresholdText}"/>
+                    </StackPanel>
+                </controls:SettingsExpander.Footer>
+            </controls:SettingsExpander>
+
+            <controls:SettingsExpander IconSource="{ci:FluentIconSource &#xE8B9;}"
+                                       Header="分块检测"
+                                       Description="人多且距离远时可检测到更多，速度变慢。一般无需开启。">
+                <controls:SettingsExpander.Footer>
+                    <ToggleSwitch IsChecked="{Binding UseTiled, Mode=TwoWay}"/>
+                </controls:SettingsExpander.Footer>
+            </controls:SettingsExpander>
+
+            <controls:SettingsExpander IconSource="{ci:FluentIconSource &#xE80A;}"
+                                       Header="分块数量"
+                                       Description="仅在开启分块检测时生效。">
+                <controls:SettingsExpander.Footer>
+                    <StackPanel Orientation="Horizontal" Spacing="10" VerticalAlignment="Center">
+                        <Slider Width="160" Minimum="2" Maximum="4" TickFrequency="1"
+                                IsSnapToTickEnabled="True" VerticalAlignment="Center"
+                                Value="{Binding TileGrid, Mode=TwoWay}"
+                                IsEnabled="{Binding UseTiled}"/>
+                        <TextBlock VerticalAlignment="Center" MinWidth="54"
+                                   Text="{Binding TileGridText}"/>
+                    </StackPanel>
+                </controls:SettingsExpander.Footer>
+            </controls:SettingsExpander>
+
+            <controls:SettingsExpander IconSource="{ci:FluentIconSource &#xE7A8;}"
+                                       Header="裁切范围"
+                                       Description="相对人脸框的放大倍数。纵向留出头肩。">
+                <controls:SettingsExpander.Footer>
+                    <StackPanel Orientation="Horizontal" Spacing="10" VerticalAlignment="Center">
+                        <TextBlock VerticalAlignment="Center" Text="横"/>
+                        <Slider Width="110" Minimum="1.0" Maximum="4.0" TickFrequency="0.1"
+                                IsSnapToTickEnabled="True" VerticalAlignment="Center"
+                                Value="{Binding CropWidth, Mode=TwoWay}"/>
+                        <TextBlock VerticalAlignment="Center" Text="纵"/>
+                        <Slider Width="110" Minimum="1.0" Maximum="5.0" TickFrequency="0.1"
+                                IsSnapToTickEnabled="True" VerticalAlignment="Center"
+                                Value="{Binding CropHeight, Mode=TwoWay}"/>
+                        <TextBlock VerticalAlignment="Center" MinWidth="86"
+                                   Text="{Binding CropText}"/>
+                    </StackPanel>
+                </controls:SettingsExpander.Footer>
+            </controls:SettingsExpander>
+
+            <controls:SettingsExpander IconSource="{ci:FluentIconSource &#xE74E;}"
+                                       Header="保存原始照片"
+                                       Description="默认关闭。不保存时照片仅在内存中处理。">
+                <controls:SettingsExpander.Footer>
+                    <ToggleSwitch IsChecked="{Binding SavePhotos, Mode=TwoWay}"/>
+                </controls:SettingsExpander.Footer>
+            </controls:SettingsExpander>
+
+        </StackPanel>
+    </ScrollViewer>
+</ci:SettingsPageBase>

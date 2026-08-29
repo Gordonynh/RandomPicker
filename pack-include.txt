@@ -1,0 +1,7 @@
+# 除了插件自己的 dll 之外，还要打进 .cipx 的文件（从 bin 目录取）。
+# 拍照抽人要用 ONNX Runtime 跑 YuNet 人脸检测模型。
+# 这几个不能省：宿主没有 ONNX Runtime，插件得自带。
+Microsoft.ML.OnnxRuntime.dll
+onnxruntime.dll
+onnxruntime_providers_shared.dll
+face_detection_yunet_2023mar.onnx
