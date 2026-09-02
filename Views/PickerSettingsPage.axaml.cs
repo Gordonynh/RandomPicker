@@ -139,6 +139,43 @@ public partial class PickerSettingsPage : SettingsPageBase, INotifyPropertyChang
 
     public string TileGridText => $"{Settings.TileGrid}×{Settings.TileGrid}";
 
+    public double AvoidRecent
+    {
+        get => Settings.PhotoAvoidRecent;
+        set
+        {
+            Settings.PhotoAvoidRecent = (int)Math.Round(value);
+            CameraPicker.ForgetRecent();
+            Save(nameof(AvoidRecentText));
+        }
+    }
+
+    public string AvoidRecentText =>
+        Settings.PhotoAvoidRecent <= 0 ? "不回避" : $"{Settings.PhotoAvoidRecent} 人";
+
+    public double TextChance
+    {
+        get => Settings.PhotoTextChance;
+        set
+        {
+            Settings.PhotoTextChance = (int)Math.Round(value);
+            Save(nameof(TextChanceText));
+        }
+    }
+
+    public string TextChanceText =>
+        Settings.PhotoTextChance <= 0 ? "不混入" : $"{Settings.PhotoTextChance}%";
+
+    public bool SeparateTextRoster
+    {
+        get => Settings.SeparateTextRoster;
+        set
+        {
+            Settings.SeparateTextRoster = value;
+            Save();
+        }
+    }
+
     public double CropWidth
     {
         get => Settings.CropWidthFactor;

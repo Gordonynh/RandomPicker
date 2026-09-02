@@ -119,6 +119,15 @@ public class PickerHostService : IHostedService
 
         if (_settings.Mode == PickMode.Photo)
         {
+            // 按设定的概率改成抽名字。掷骰子用密码学随机数，
+            // 和抽人用的是同一个源，不会出现「每次开机前几抽都一样」。
+            var chance = Math.Clamp(_settings.PhotoTextChance, 0, 100);
+            if (chance > 0 && System.Security.Cryptography.RandomNumberGenerator.GetInt32(100) < chance)
+            {
+                PickFromRoster();
+                return;
+            }
+
             PickFromPhoto();
             return;
         }
@@ -166,6 +175,32 @@ public class PickerHostService : IHostedService
         });
     }
 
+    /// <summary>
+    /// 文字抽选用的名单。
+    /// </summary>
+    /// <remarks>
+    /// 开了「文字抽选用单独名单」就读那一份，否则还是主名单。
+    /// 两份各自有各自的「本轮已抽」状态吗？——没有，共用一套。
+    /// 名单隔离是为了圈定范围，不是为了各记各的进度。
+    /// </remarks>
+    private RosterService TextRoster
+    {
+        get
+        {
+            if (!_settings.SeparateTextRoster)
+            {
+                return _roster!;
+            }
+
+            _textRoster ??= new RosterService(
+                Path.Combine(_configFolder, "名单-文字.txt"));
+
+            return _textRoster;
+        }
+    }
+
+    private RosterService? _textRoster;
+
     /// <summary>按名单抽一个。</summary>
     /// <param name="note">附带说明，比如从拍照模式退回来的原因。</param>
     private void PickFromRoster(string? note = null)
@@ -175,7 +210,7 @@ public class PickerHostService : IHostedService
             return;
         }
 
-        var name = _roster.Pick(_settings);
+        var name = TextRoster.Pick(_settings);
         SaveSettingsInternal();
         _window?.RefreshCounter();
 

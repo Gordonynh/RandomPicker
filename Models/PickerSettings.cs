@@ -105,6 +105,38 @@ public class PickerSettings
     /// <summary>分块的边数（3 = 切成 3×3）。</summary>
     public int TileGrid { get; set; } = 3;
 
+    /// <summary>
+    /// 拍照抽人时回避最近抽过的几个人。
+    /// </summary>
+    /// <remarks>
+    /// 拍照模式原来每一张都是从当场检出的人脸里独立随机挑一个，<b>没有任何记忆</b>——
+    /// 于是「连着两次抽到同一个人」是必然会发生的，而且在人不多的时候相当频繁：
+    /// 30 个人里连抽两次撞上的概率就有 1/30，一节课抽十几次几乎一定会遇到。
+    /// <para/>
+    /// 教室里人不会乱动，所以用<b>人脸在画面里的位置</b>当身份：
+    /// 位置落在最近抽过的那几个人附近的，这一轮先不抽。
+    /// 设成 0 就是完全独立随机（原来的行为）。
+    /// </remarks>
+    public int PhotoAvoidRecent { get; set; } = 6;
+
+    /// <summary>
+    /// 拍照模式下有多大概率改成按名单抽文字。
+    /// </summary>
+    /// <remarks>
+    /// 一直是照片会腻，偶尔蹦一个名字更有意思，也照顾到没被拍进画面的人。
+    /// 0 = 永远拍照，100 = 永远抽名字。
+    /// </remarks>
+    public int PhotoTextChance { get; set; }
+
+    /// <summary>
+    /// 文字抽选用<b>单独一份名单</b>。
+    /// </summary>
+    /// <remarks>
+    /// 开着的时候读 <c>名单-文字.txt</c>，和拍照那套完全隔离：
+    /// 想让文字抽选只覆盖某几个人（比如轮到发言的小组）时不必动主名单。
+    /// </remarks>
+    public bool SeparateTextRoster { get; set; }
+
     /// <summary>裁切时相对人脸框的横向放大倍数。</summary>
     public double CropWidthFactor { get; set; } = 1.8;
 

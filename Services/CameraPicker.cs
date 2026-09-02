@@ -187,7 +187,7 @@ internal static class CameraPicker
                 };
             }
 
-            var chosen = faces[RandomNumberGenerator.GetInt32(faces.Count)];
+            var chosen = Choose(faces, width, height, settings);
             var portrait = await CropAsync(pixels, width, height, Expand(chosen, width, height, settings));
 
             return new ShotResult
@@ -582,6 +582,82 @@ internal static class CameraPicker
             return null;
         }
     }
+
+    #region 别老抽到同一个人
+
+    /// <summary>
+    /// 最近抽中的人脸中心，按画面归一化。
+    /// </summary>
+    /// <remarks>
+    /// 只在内存里留着：摄像头一挪、人一换座位，这些坐标就没意义了，
+    /// 存进配置反而会把过时的回避带到下一次开机。
+    /// </remarks>
+    private static readonly List<(double X, double Y)> Recent = [];
+
+    /// <summary>认成同一个人的距离。按画面对角线的比例算。</summary>
+    private const double SameFaceDistance = 0.045;
+
+    /// <summary>
+    /// 从检出的人脸里挑一个，尽量避开最近抽过的那几个。
+    /// </summary>
+    /// <remarks>
+    /// 避开之后如果一个都不剩（人本来就少、或者回避设得太多），就退回全体重挑——
+    /// 宁可重复也不能抽不出人。
+    /// </remarks>
+    private static FaceBox Choose(List<FaceBox> faces, int width, int height,
+        PickerSettings settings)
+    {
+        var avoid = Math.Max(0, settings.PhotoAvoidRecent);
+
+        lock (Recent)
+        {
+            while (Recent.Count > avoid)
+            {
+                Recent.RemoveAt(0);
+            }
+
+            var pool = avoid == 0
+                ? faces
+                : faces.Where(f => !Recent.Any(r => Near(r, Center(f, width, height)))).ToList();
+
+            if (pool.Count == 0)
+            {
+                pool = faces;
+                Recent.Clear();
+            }
+
+            var picked = pool[RandomNumberGenerator.GetInt32(pool.Count)];
+
+            if (avoid > 0)
+            {
+                Recent.Add(Center(picked, width, height));
+                while (Recent.Count > avoid)
+                {
+                    Recent.RemoveAt(0);
+                }
+            }
+
+            return picked;
+        }
+    }
+
+    private static (double X, double Y) Center(FaceBox face, int width, int height) =>
+        (width <= 0 ? 0 : (face.X + face.Width / 2.0) / width,
+         height <= 0 ? 0 : (face.Y + face.Height / 2.0) / height);
+
+    private static bool Near((double X, double Y) a, (double X, double Y) b) =>
+        Math.Sqrt(Math.Pow(a.X - b.X, 2) + Math.Pow(a.Y - b.Y, 2)) < SameFaceDistance;
+
+    /// <summary>换了摄像头或者手动要求重来时清掉回避记录。</summary>
+    public static void ForgetRecent()
+    {
+        lock (Recent)
+        {
+            Recent.Clear();
+        }
+    }
+
+    #endregion
 
     private static async Task<InMemoryRandomAccessStream> EncodePngAsync(byte[] bgra, int width, int height)
     {

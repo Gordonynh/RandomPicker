@@ -111,6 +111,42 @@
                 </controls:SettingsExpander.Footer>
             </controls:SettingsExpander>
 
+            <controls:SettingsExpander IconSource="{ci:FluentIconSource &#xE0BE;}"
+                                       Header="回避刚抽过的人"
+                                       Description="按人脸在画面里的位置认人。设成不回避就是每次独立随机，容易连抽到同一个。">
+                <controls:SettingsExpander.Footer>
+                    <StackPanel Orientation="Horizontal" Spacing="10" VerticalAlignment="Center">
+                        <Slider Width="160" Minimum="0" Maximum="20" TickFrequency="1"
+                                IsSnapToTickEnabled="True" VerticalAlignment="Center"
+                                Value="{Binding AvoidRecent, Mode=TwoWay}"/>
+                        <TextBlock VerticalAlignment="Center" MinWidth="66"
+                                   Text="{Binding AvoidRecentText}"/>
+                    </StackPanel>
+                </controls:SettingsExpander.Footer>
+            </controls:SettingsExpander>
+
+            <controls:SettingsExpander IconSource="{ci:FluentIconSource &#xF2ED;}"
+                                       Header="混入文字抽选"
+                                       Description="拍照模式下有多大概率改成抽名字。也照顾到没被拍进画面的人。">
+                <controls:SettingsExpander.Footer>
+                    <StackPanel Orientation="Horizontal" Spacing="10" VerticalAlignment="Center">
+                        <Slider Width="160" Minimum="0" Maximum="100" TickFrequency="5"
+                                IsSnapToTickEnabled="True" VerticalAlignment="Center"
+                                Value="{Binding TextChance, Mode=TwoWay}"/>
+                        <TextBlock VerticalAlignment="Center" MinWidth="66"
+                                   Text="{Binding TextChanceText}"/>
+                    </StackPanel>
+                </controls:SettingsExpander.Footer>
+            </controls:SettingsExpander>
+
+            <controls:SettingsExpander IconSource="{ci:FluentIconSource &#xE699;}"
+                                       Header="文字抽选用单独名单"
+                                       Description="开启后读插件配置目录下的「名单-文字.txt」，和主名单互不影响。">
+                <controls:SettingsExpander.Footer>
+                    <ToggleSwitch IsChecked="{Binding SeparateTextRoster, Mode=TwoWay}"/>
+                </controls:SettingsExpander.Footer>
+            </controls:SettingsExpander>
+
             <controls:SettingsExpander IconSource="{ci:FluentIconSource &#xE7A8;}"
                                        Header="裁切范围"
                                        Description="相对人脸框的放大倍数。纵向留出头肩。">
