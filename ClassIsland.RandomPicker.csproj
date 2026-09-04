@@ -26,7 +26,7 @@
     <ItemGroup>
         <!-- 拍照抽人用 Windows 自带的 MediaCapture + FaceDetector，零新增依赖。
              按 dll 路径引用而不是切 TargetFramework：切成 net8.0-windows10.0.19041.0 会触发
-             框架引用还原，而这台机器系统时间在 2026、TLS 全废，联网还原是走不通的。
+             框架引用还原，而系统时钟不正确时 TLS 校验全失败，联网还原是走不通的。
              这个包的 lib/ 下就是 net8.0，可以当普通程序集引用。
 
              Private=false：绝对不能把这两个 dll 打进插件包。宿主的 PluginLoadContext 里有一份

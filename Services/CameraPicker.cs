@@ -63,7 +63,7 @@ public sealed class ShotResult
 /// </summary>
 /// <remarks>
 /// <b>取帧走 <see cref="MediaFrameReader"/>，不是 <c>CapturePhotoToStreamAsync</c>。</b>
-/// 实测这台机器上三个摄像头的 <c>MediaStreamType.Photo</c> 档位<b>全是空的</b>
+/// 实测多种摄像头（含虚拟摄像头、采集卡透传）的 <c>MediaStreamType.Photo</c> 档位<b>全是空的</b>
 /// （虚拟/转接摄像头只有预览流），拍照接口一律抛异常——老版本「拍不出照」就是这个原因。
 /// 预览流这条路三个都能用，而且一次性建好之后<b>每帧只要 3~43 ms</b>。
 /// <para/>
