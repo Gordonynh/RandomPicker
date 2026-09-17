@@ -1,0 +1,54 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="coverlet.collector" Version="6.0.0" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.8.0" />
+    <PackageReference Include="xunit" Version="2.5.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.5.3" />
+    <!-- 插件的设置读写用 System.Text.Json。经宿主的依赖链它被编译成 9.0 版本，
+         而 net8.0 共享框架自带的是 8.0；测试进程里两者对不上，就会抛
+         「Could not load file or assembly 'System.Text.Json, Version=9.0.0.0'」。
+         这里显式引用同一大版本，dll 才会被复制到测试输出目录。
+         版本必须 >= 9.0.2：宿主的 ReactiveUI 20.2.45 要求至少这个版本，
+         给低了 NuGet 会以「包降级」(NU1605) 直接拒绝还原。 -->
+    <PackageReference Include="System.Text.Json" Version="9.0.2" />
+    <!-- 界面层的测试要在一个真正的 Avalonia 环境里跑。无头平台不需要显示器，
+         配合 Skia 还能把控件真的渲染成位图——「画面上是不是真有东西」这一条
+         只有渲染出来才验得了。版本必须和插件用的 Avalonia 一致。 -->
+    <PackageReference Include="Avalonia.Headless.XUnit" Version="11.3.17" />
+    <PackageReference Include="Avalonia.Skia" Version="11.3.17" />
+    <!-- 插件的宿主服务实现了 IHostedService，那个接口在 Microsoft.Extensions.Hosting.Abstractions 里。
+         插件项目自己引用它时标了「不复制到输出」（宿主已经带了一份），于是测试输出目录里没有这个 dll，
+         一构造 PickerHostService 就抛 FileNotFoundException。这里显式引一份把它拷过来。 -->
+    <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" Version="8.0.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- 被测的插件本体。插件内部的几何计算与抽选状态是 internal，
+         靠主项目 csproj 里的 InternalsVisibleTo 开给 "ClassIsland.RandomPicker.Tests" 这个程序集名。 -->
+    <ProjectReference Include="..\..\ClassIsland.RandomPicker.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- 人脸框类型（FaceBox）定义在 FaceModel.cs 里，而那个类持有 ONNX Runtime 的会话字段。
+         要调用它的静态方法（比如 Merge）就得让这个程序集在场，否则加载类型时会报找不到依赖。
+         只拷托管 dll；原生 onnxruntime.dll 只有真正跑推理才需要，这里用不到。 -->
+    <Reference Include="Microsoft.ML.OnnxRuntime" Private="true">
+      <HintPath>..\..\Native\Microsoft.ML.OnnxRuntime.dll</HintPath>
+    </Reference>
+  </ItemGroup>
+
+</Project>

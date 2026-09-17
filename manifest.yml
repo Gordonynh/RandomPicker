@@ -1,10 +1,13 @@
 entranceAssembly: ClassIsland.RandomPicker.dll
 name: 随机抽选
 id: gordon.randompicker
-description: 桌面抽人悬浮窗。点击抽取名单中的一人，屏幕中央弹出大字；支持拍照抽人，从合影中检测人脸随机抽取。名单为纯文本，一行一个名字。
-version: 1.1.0.0
+description: 桌面抽人悬浮窗。点击抽取名单中的一人，屏幕中央弹出大字；支持拍照抽人，从合影中检测人脸随机抽取。名单为纯文本，一行一个名字。（happy 二改）
+version: 1.3.0.0
 apiVersion: 2.0.0.0
-author: GordonYoung
+author: GordonYoung（happy 二改）
+# 二改留痕。宿主读元数据用的是 IgnoreUnmatchedProperties（ClassIsland/Services/PluginService.cs），
+# 认不出的键会被安全忽略，不会导致插件加载失败；但插件列表界面只渲染已知字段，这一行不会显示出来。
+happy二改: happy
 icon: icon.png
 url: https://github.com/Gordonynh/RandomPicker
 readme: README.md

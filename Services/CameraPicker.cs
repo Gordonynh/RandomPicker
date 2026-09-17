@@ -187,8 +187,18 @@ internal static class CameraPicker
                 };
             }
 
-            var chosen = Choose(faces, width, height, settings);
-            var portrait = await CropAsync(pixels, width, height, Expand(chosen, width, height, settings));
+            // 从检出的人脸里挑一个：会尽量避开最近抽过的那几个，人少到避不开时才允许重复。
+            var chosen = PickState.Choose(faces, width, height, settings.PhotoAvoidRecent);
+            if (chosen is null)
+            {
+                // 喵~防御：上面已经确认 faces 至少有一张，正常走不到这里。
+                // 万一将来改成别处传来的空列表，也不能让空引用崩掉整次抽人。
+                return Fail($"未能从检出的 {faces.Count} 张人脸中选出目标");
+            }
+
+            // 把检出的脸框放大成「头 + 肩」的人像框再裁出来，就是最后展示给用户的那张人像。
+            var portrait = await CropAsync(pixels, width, height,
+                FaceGeometry.Expand(chosen, width, height, settings));
 
             return new ShotResult
             {
@@ -446,11 +456,14 @@ internal static class CameraPicker
         if (settings.UseTiledDetection)
         {
             var grid = Math.Clamp(settings.TileGrid, 2, 4);
-            foreach (var tile in Tiles(width, height, grid))
+            // 切块的几何计算在 FaceGeometry 里，那边不碰摄像头，可以单独测。
+            foreach (var tile in FaceGeometry.Tiles(width, height, grid))
             {
-                var (cropped, cw, ch) = Crop(pixels, width, height, tile);
-                foreach (var face in _model.Detect(cropped, cw, ch, threshold))
+                // 抠出这一块单独推理；块越小，后排的小脸占比越大，越容易被检出。
+                var (cropped, croppedWidth, croppedHeight) = FaceGeometry.Crop(pixels, width, height, tile);
+                foreach (var face in _model.Detect(cropped, croppedWidth, croppedHeight, threshold))
                 {
+                    // 块内坐标要加上块的左上角偏移，才是整帧坐标系下的位置。
                     found.Add(face with { X = face.X + tile.X, Y = face.Y + tile.Y });
                 }
             }
@@ -459,69 +472,23 @@ internal static class CameraPicker
         return FaceModel.Merge(found);
     }
 
-    private static IEnumerable<FaceBox> Tiles(int width, int height, int grid)
-    {
-        const double overlap = 0.2;
-        double stepX = width / (double)grid, stepY = height / (double)grid;
-        for (var row = 0; row < grid; row++)
-        {
-            for (var col = 0; col < grid; col++)
-            {
-                var x = (int)Math.Max(0, col * stepX - stepX * overlap);
-                var y = (int)Math.Max(0, row * stepY - stepY * overlap);
-                var right = (int)Math.Min(width, (col + 1) * stepX + stepX * overlap);
-                var bottom = (int)Math.Min(height, (row + 1) * stepY + stepY * overlap);
-                if (right - x > 32 && bottom - y > 32)
-                {
-                    yield return new FaceBox(x, y, right - x, bottom - y, 0);
-                }
-            }
-        }
-    }
-
     #endregion
 
     #region 裁切与成图
 
-    /// <summary>把人脸框放大成「头 + 肩」的人像框，并夹回画面范围内。</summary>
-    private static FaceBox Expand(FaceBox face, int width, int height, PickerSettings settings)
-    {
-        var targetWidth = (int)(face.Width * Math.Clamp(settings.CropWidthFactor, 1.0, 4.0));
-        var targetHeight = (int)(face.Height * Math.Clamp(settings.CropHeightFactor, 1.0, 5.0));
-
-        var centerX = face.X + face.Width / 2;
-        // 纵向中心往下挪一点：人脸框基本只框住脸，多出来的高度该给肩膀而不是头顶上的空气。
-        var centerY = face.Y + (int)(face.Height * 0.62);
-
-        var x = Math.Clamp(centerX - targetWidth / 2, 0, Math.Max(0, width - 1));
-        var y = Math.Clamp(centerY - targetHeight / 2, 0, Math.Max(0, height - 1));
-        return new FaceBox(x, y,
-            Math.Max(1, Math.Min(targetWidth, width - x)),
-            Math.Max(1, Math.Min(targetHeight, height - y)), face.Score);
-    }
-
-    private static (byte[] Pixels, int Width, int Height) Crop(byte[] pixels, int width, int height, FaceBox area)
-    {
-        var w = Math.Clamp(area.Width, 1, width - area.X);
-        var h = Math.Clamp(area.Height, 1, height - area.Y);
-        var result = new byte[w * h * 4];
-        for (var y = 0; y < h; y++)
-        {
-            Array.Copy(pixels, ((area.Y + y) * width + area.X) * 4, result, y * w * 4, w * 4);
-        }
-
-        return (result, w, h);
-    }
-
+    /// <summary>裁出一块区域并转成 Avalonia 位图。</summary>
+    /// <returns>裁好的位图；编码失败时返回 <c>null</c>。</returns>
     private static async Task<Bitmap?> CropAsync(byte[] pixels, int width, int height, FaceBox area)
     {
         try
         {
-            var (cropped, w, h) = Crop(pixels, width, height, area);
-            return await ToAvaloniaBitmapAsync(cropped, w, h);
+            // 具体怎么从整帧里抠像素在 FaceGeometry 里（那边可以离线单测），这里只管把结果编码成位图。
+            var (cropped, croppedWidth, croppedHeight) = FaceGeometry.Crop(pixels, width, height, area);
+            return await ToAvaloniaBitmapAsync(cropped, croppedWidth, croppedHeight);
         }
         catch (Exception)
         {
+            // 喵~防御：编码失败（内存不足、尺寸异常）不该连累整次抽人流程，返回 null 让上层显示「没裁出人像」。
             return null;
         }
     }
@@ -586,76 +553,16 @@ internal static class CameraPicker
     #region 别老抽到同一个人
 
     /// <summary>
-    /// 最近抽中的人脸中心，按画面归一化。
+    /// 回避记录。
     /// </summary>
     /// <remarks>
-    /// 只在内存里留着：摄像头一挪、人一换座位，这些坐标就没意义了，
-    /// 存进配置反而会把过时的回避带到下一次开机。
+    /// 怎么记位置、怎么避开，整套逻辑都在 <see cref="FacePickState"/> 里——
+    /// 那是个普通实例，不碰摄像头也不碰界面，可以离线单测；这里只留一份给插件自己用。
     /// </remarks>
-    private static readonly List<(double X, double Y)> Recent = [];
-
-    /// <summary>认成同一个人的距离。按画面对角线的比例算。</summary>
-    private const double SameFaceDistance = 0.045;
-
-    /// <summary>
-    /// 从检出的人脸里挑一个，尽量避开最近抽过的那几个。
-    /// </summary>
-    /// <remarks>
-    /// 避开之后如果一个都不剩（人本来就少、或者回避设得太多），就退回全体重挑——
-    /// 宁可重复也不能抽不出人。
-    /// </remarks>
-    private static FaceBox Choose(List<FaceBox> faces, int width, int height,
-        PickerSettings settings)
-    {
-        var avoid = Math.Max(0, settings.PhotoAvoidRecent);
-
-        lock (Recent)
-        {
-            while (Recent.Count > avoid)
-            {
-                Recent.RemoveAt(0);
-            }
-
-            var pool = avoid == 0
-                ? faces
-                : faces.Where(f => !Recent.Any(r => Near(r, Center(f, width, height)))).ToList();
-
-            if (pool.Count == 0)
-            {
-                pool = faces;
-                Recent.Clear();
-            }
-
-            var picked = pool[RandomNumberGenerator.GetInt32(pool.Count)];
-
-            if (avoid > 0)
-            {
-                Recent.Add(Center(picked, width, height));
-                while (Recent.Count > avoid)
-                {
-                    Recent.RemoveAt(0);
-                }
-            }
-
-            return picked;
-        }
-    }
-
-    private static (double X, double Y) Center(FaceBox face, int width, int height) =>
-        (width <= 0 ? 0 : (face.X + face.Width / 2.0) / width,
-         height <= 0 ? 0 : (face.Y + face.Height / 2.0) / height);
-
-    private static bool Near((double X, double Y) a, (double X, double Y) b) =>
-        Math.Sqrt(Math.Pow(a.X - b.X, 2) + Math.Pow(a.Y - b.Y, 2)) < SameFaceDistance;
+    private static readonly FacePickState PickState = new();
 
     /// <summary>换了摄像头或者手动要求重来时清掉回避记录。</summary>
-    public static void ForgetRecent()
-    {
-        lock (Recent)
-        {
-            Recent.Clear();
-        }
-    }
+    public static void ForgetRecent() => PickState.Forget();
 
     #endregion
 

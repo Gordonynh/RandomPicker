@@ -37,6 +37,31 @@ public enum PickerSize
 }
 
 /// <summary>
+/// 抽选动画样式。
+/// </summary>
+/// <remarks>
+/// 动画只是「表演」：抽中的结果在点击的那一刻就已经定好了，
+/// 所以换任何样式都不会改变抽中概率，也不会影响「本轮已抽」的记账。
+/// </remarks>
+public enum RevealAnimationStyle
+{
+    /// <summary>不播动画：抽完直接出结果（一直以来的行为，也是默认值）。</summary>
+    None,
+
+    /// <summary>中央大字原地快速换名字，线性减速，最后定格在中选者上。</summary>
+    Scroll,
+
+    /// <summary>一排名字方块横向滚过，指针停在中间那一个上面，像 CSGO 开箱。</summary>
+    Csgo,
+
+    /// <summary>若干格子逐格抽字，一个字一个字地定下来，像老虎机。</summary>
+    Slot,
+
+    /// <summary>转盘转到两个扇区的边界上，再滑进中选的那一格，像拼多多的现金转盘。</summary>
+    Wheel
+}
+
+/// <summary>
 /// 插件设置。存在插件配置目录下的 <c>settings.json</c>。
 /// </summary>
 public class PickerSettings
@@ -54,16 +79,83 @@ public class PickerSettings
     /// <summary>中央大字停留秒数。</summary>
     public double RevealSeconds { get; set; } = 2.5;
 
-    /// <summary>悬浮窗位置（物理像素）。NaN 表示还没摆过，用默认位置。</summary>
+    /// <summary>悬浮窗位置（物理像素）。int.MinValue 表示还没摆过，用默认位置。</summary>
     public int WindowX { get; set; } = int.MinValue;
 
+    /// <summary>悬浮窗位置的纵坐标（物理像素）。没摆过时同 <see cref="WindowX"/>。</summary>
     public int WindowY { get; set; } = int.MinValue;
 
+    /// <summary>
+    /// 记下 <see cref="WindowX"/>/<see cref="WindowY"/> 时，那块屏幕的宽度（物理像素）。
+    /// </summary>
+    /// <remarks>
+    /// <b>光存坐标是不够的。</b>屏幕分辨率换过之后，同一组坐标在新屏幕上可能落到屏幕外、
+    /// 或者跑到跟原来完全不同的地方去。有了这个宽度就能判断「记下位置时的屏幕还在不在」：
+    /// 当<b>所有</b>屏幕的尺寸都和它不一样时，说明分辨率变过了，坐标作废，回到默认位置。
+    /// <para/>
+    /// 比对的是「所有屏幕里有没有一块尺寸相同的」，而不是「当前这块屏幕尺寸一样吗」——
+    /// 后者在双屏下会误判：窗口摆在副屏上时，开机那一瞬间窗口还在原点，
+    /// 按当前屏幕算会拿主屏的尺寸去比副屏记下的值，明明什么都没变却把位置重置了。
+    /// </remarks>
+    public int WindowScreenWidth { get; set; } = int.MinValue;
+
+    /// <summary>记下位置时那块屏幕的高度（物理像素）。判定规则见 <see cref="WindowScreenWidth"/>。</summary>
+    public int WindowScreenHeight { get; set; } = int.MinValue;
+
     /// <summary>「不重复」模式下本轮已经抽到过的人。</summary>
-    public List<string> DrawnThisRound { get; set; } = new();
+    public List<string> DrawnThisRound
+    {
+        // 直接把底层列表交出去，调用方（抽选逻辑）需要就地增删。
+        get => _drawnThisRound;
+        // 喵~防御：配置文件被手改成 "DrawnThisRound": null 时，反序列化会把字段整个盖成 null，
+        // 之后每一次 Contains 都会崩在空引用上。这里统一兜底成空列表，
+        // 语义上正好是「本轮还没抽过任何人」，是唯一安全的解释。
+        set => _drawnThisRound = value ?? new List<string>();
+    }
+
+    /// <summary>本轮已抽名单的底层存储，永远不会是 null。</summary>
+    private List<string> _drawnThisRound = new();
 
     /// <summary>上一次抽到的人，用于「随机抽选」模式回避连抽同一个。</summary>
     public string? LastPicked { get; set; }
+
+    #region 抽选动画
+
+    /// <summary>抽选动画样式。</summary>
+    /// <remarks>
+    /// <b>默认不播动画</b>，免得升级之后突然被动画到。
+    /// 换成任何样式都不影响公平性——结果在点击那一刻就抽好了，动画只负责演。
+    /// </remarks>
+    public RevealAnimationStyle AnimationStyle { get; set; } = RevealAnimationStyle.None;
+
+    /// <summary>「滚动名字」样式的动画时长，单位：秒。</summary>
+    public double ScrollDurationSeconds { get; set; } = 4.0;
+
+    /// <summary>「CSGO 开箱」样式的动画时长，单位：秒。</summary>
+    public double CsgoDurationSeconds { get; set; } = 4.0;
+
+    /// <summary>「老虎机」样式每一格的时长，单位：秒。总时长 = 这个值 × 格数。</summary>
+    public double SlotStepSeconds { get; set; } = 1.5;
+
+    /// <summary>「转盘」样式转到边界所用的时长，单位：秒。</summary>
+    /// <remarks>滑进扇区的那一下是固定 0.35 秒，不计在这个值里面。</remarks>
+    public double WheelDurationSeconds { get; set; } = 6.0;
+
+    /// <summary>
+    /// CSGO 动画里各档品质的权重，单位：百分数。
+    /// </summary>
+    /// <remarks>
+    /// 顺序和 <c>ItemRarity</c> 的枚举一致：军规级（蓝）、受限级（紫）、保密级（粉）、
+    /// 隐秘级（红）、罕见特殊物品（金）。默认就是 CS:GO 开箱那套经典分布。
+    /// <para/>
+    /// <b>这套权重只决定方块的颜色，不决定抽到谁。</b>「不影响实际抽取」这一点有单测钉着
+    /// （见 <c>ItemRarityTests</c>：把权重全压给金，中选者依然不变）。
+    /// 另外这里的默认值和 <c>ItemRarityTable</c> 里的那份必须一致，
+    /// 有单测比对，防止改了一处忘了另一处。
+    /// </remarks>
+    public List<double> RarityWeights { get; set; } = [79.92, 15.98, 3.20, 0.64, 0.26];
+
+    #endregion
 
     #region 拍照抽人
 

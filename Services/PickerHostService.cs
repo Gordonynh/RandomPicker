@@ -25,6 +25,9 @@ public class PickerHostService : IHostedService
     /// <summary>拍照抽人正在跑。摄像头开一次要一两秒，这期间再点就直接忽略。</summary>
     private bool _shooting;
 
+    /// <summary>抽选动画正在播。这期间再点也直接忽略——不然结果会被后一次抽选顶掉。</summary>
+    private bool _animating;
+
     private PickerSettings _settings = new();
     private RosterService? _roster;
     private PickerWindow? _window;
@@ -56,6 +59,16 @@ public class PickerHostService : IHostedService
     /// <summary>把设置存盘。设置页改完调一下。</summary>
     public void SaveSettings() => SaveSettingsInternal();
 
+    /// <summary>
+    /// 设置被改动并落盘之后触发。
+    /// </summary>
+    /// <remarks>
+    /// 右键菜单和设置页改的是<b>同一份</b>设置，但两边都是「谁改谁负责刷新自己」——
+    /// 于是从菜单改完动画样式，已经打开着的设置页不会知道，下拉框还停在旧的一档上，
+    /// 看起来就是「两处选择不一致」。这条事件用来把改动广播出去。
+    /// </remarks>
+    public event EventHandler? SettingsSaved;
+
     public Task StartAsync(CancellationToken cancellationToken)
     {
         _settings = PickerSettings.Load(_settingsPath);
@@ -72,6 +85,8 @@ public class PickerHostService : IHostedService
         SaveSettingsInternal();
         Dispatcher.UIThread.Post(() =>
         {
+            // 插件要停了，正在播的动画会被掐掉——同一个理由，标记得手动清。
+            ReleaseAnimation();
             RevealWindow.CloseCurrent();
             _window?.Close();
             _window = null;
@@ -90,9 +105,14 @@ public class PickerHostService : IHostedService
 
         _window = new PickerWindow(_settings, _roster);
         _window.PickRequested += (_, _) => Pick();
+        // 动画播到一半时点钮，含义是「跳过动画」，而不是「再抽一次」。
+        _window.SkipRequested += (_, _) => RevealWindow.SkipAnimation();
         _window.SettingsChanged += (_, _) => SaveSettingsInternal();
         _window.HideRequested += (_, _) =>
         {
+            // 藏起来的时候正在播的动画会被掐掉，而掐掉的动画不会再回调收尾，
+            // 所以「正在播」这个标记必须在这里手动清掉——不清的话以后再也抽不动了。
+            ReleaseAnimation();
             RevealWindow.CloseCurrent();
             _window?.Hide();
             // 藏起来之后还能从「设置 → 提醒 → 随机抽选」那边知道插件还在，
@@ -105,6 +125,9 @@ public class PickerHostService : IHostedService
     {
         _window?.CapturePosition();
         _settings.Save(_settingsPath);
+        // 广播出去，让设置页把自己刷成最新值。
+        // 悬浮钮右键菜单和设置页是同一份设置的两个入口，两边显示必须一致。
+        SettingsSaved?.Invoke(this, EventArgs.Empty);
     }
 
     /// <summary>
@@ -112,6 +135,12 @@ public class PickerHostService : IHostedService
     /// </summary>
     private void Pick()
     {
+        // 上一轮还在演的时候再点没有意义：结果已经定好了，硬插进去只会让画面和中选者对不上。
+        if (_animating)
+        {
+            return;
+        }
+
         if (_roster is null)
         {
             return;
@@ -150,7 +179,7 @@ public class PickerHostService : IHostedService
         }
 
         _shooting = true;
-        _window?.SetBusy(true);
+        _window?.SetBusy(PickerBusyKind.Shooting);
 
         _ = Task.Run(async () =>
         {
@@ -158,7 +187,7 @@ public class PickerHostService : IHostedService
             Dispatcher.UIThread.Post(() =>
             {
                 _shooting = false;
-                _window?.SetBusy(false);
+                _window?.SetBusy(PickerBusyKind.None);
 
                 if (result is { Success: true, Portrait: not null })
                 {
@@ -205,22 +234,101 @@ public class PickerHostService : IHostedService
     /// <param name="note">附带说明，比如从拍照模式退回来的原因。</param>
     private void PickFromRoster(string? note = null)
     {
-        if (_roster is null)
+        // 同上：动画没播完就再来一发，只会让画面和中选者对不上。
+        if (_animating || _roster is null)
         {
             return;
         }
 
+        // 结果在这一刻就抽好了。往后播不播动画、播哪一种，都不会再改变他。
         var name = TextRoster.Pick(_settings);
         SaveSettingsInternal();
-        _window?.RefreshCounter();
 
         if (name is null)
         {
             // 名单是空的——与其静悄悄什么都不发生，不如直接把话说清楚。
+            // 这一下没抽成，所以钮上的剩余人数现在就刷新。
+            _window?.RefreshCounter();
             Reveal(note is null ? "名单是空的" : note, isHint: true);
             return;
         }
 
+        StartAnimation(name, note);
+    }
+
+    /// <summary>
+    /// 解开「正在播动画」的封锁，并把悬浮钮恢复成剩余人数。
+    /// </summary>
+    /// <remarks>
+    /// 只在动画被<b>中途掐掉</b>的地方调用（藏窗口、插件停止）。
+    /// 正常播完的那条路走的是 <see cref="StartAnimation"/> 里的回调，那边自己会解。
+    /// </remarks>
+    private void ReleaseAnimation()
+    {
+        _animating = false;
+        _window?.SetBusy(PickerBusyKind.None);
+    }
+
+    /// <summary>
+    /// 该播动画就播，播完再出结果；不该播就直接出结果。
+    /// </summary>
+    /// <param name="name">中选者。</param>
+    /// <param name="note">附带说明，比如从拍照模式退回来的原因。</param>
+    /// <remarks>
+    /// <b>动画完全不参与抽选</b>：名字在这里之前就已经定好了，这段代码只决定「怎么演」。
+    /// 所以任何一步出问题（名单数据不满足这个样式、时长配置被改坏），
+    /// 都可以放心地退化成「直接出结果」，不会影响公平性。
+    /// </remarks>
+    private void StartAnimation(string name, string? note)
+    {
+        // 只认插件自己的设置：宿主的「动画级别」不参与判断。
+        // 2026-09-15 主人定的——动画是这个功能本身，不是界面装饰，
+        // ClassIsland 关掉自己的界面过渡不该连累抽选表演。
+        // 想彻底关掉，在右键菜单里选「无动画」；那条路下面会被 Build 判成 null。
+        var style = _settings.AnimationStyle;
+
+        // 按样式造排片表；数据不满足要求时返回 null（比如名单里有超过四个字的名字却选了老虎机）。
+        var plan = RevealAnimationPlanner.Build(style, TextRoster.Names, name, _settings);
+
+        // 不播动画这条路：直接出结果。
+        if (plan is null)
+        {
+            // 没有动画就没什么可等的，出结果的同时把钮上的剩余人数刷成新的。
+            _window?.RefreshCounter();
+            FinishReveal(name, note);
+            return;
+        }
+
+        // 播动画这条路：这期间挡住新的抽选，钮上显示「跳」，点一下可以跳过。
+        _animating = true;
+        _window?.SetBusy(PickerBusyKind.Animating);
+
+        // 停留时长从一开始就传进去，动画播完它才开始计时。
+        var hold = TimeSpan.FromSeconds(Math.Clamp(_settings.RevealSeconds, 0.5, 30));
+
+        RevealWindow.Play(plan, _settings.RevealFontSize, _window?.Accent ?? DefaultAccent, hold, () =>
+        {
+            // 动画播完（或被跳过）的这一刻才是「结果揭晓」：
+            // 先把钮上的状态收掉——SetBusy(None) 会顺手把剩余人数刷成新的，
+            // 而那正是这一抽的结果之一，所以必须在动画结束之后才刷，否则等于提前剧透。
+            _animating = false;
+            _window?.SetBusy(PickerBusyKind.None);
+            // 中央大字和 ClassIsland 提醒都在这里才发出去，免得提醒先于动画到达。
+            FinishReveal(name, note);
+        });
+    }
+
+    /// <summary>
+    /// 把中选者亮出来：中央大字 + ClassIsland 提醒。
+    /// </summary>
+    /// <param name="name">中选者的名字。</param>
+    /// <param name="note">附带说明，比如从拍照模式退回来的原因。</param>
+    /// <remarks>
+    /// 单独拆成一个方法，是为了让「动画播完之后」和「不播动画直接出结果」这两条路
+    /// 走一模一样的收尾逻辑——免得两边各写一遍，将来改一处忘一处。
+    /// </remarks>
+    private void FinishReveal(string name, string? note)
+    {
         if (_settings.ShowCenterReveal)
         {
             Reveal(name, isHint: false, note);

@@ -14,8 +14,11 @@ namespace ClassIsland.RandomPicker.Services;
 /// <remarks>
 /// 名单就是一个纯文本文件，一行一个名字。没有引号、没有 JSON、没有转义，
 /// 用记事本就能改。空行和以 <c>#</c> 开头的行会被忽略，重复的名字只算一个。
+/// <para/>
+/// 内部挂着一个文件监视器（用来实现「保存后立刻生效」），所以用完必须 <see cref="Dispose"/>，
+/// 否则监视器会一直跟着这个进程。
 /// </remarks>
-public class RosterService
+public class RosterService : IDisposable
 {
     private readonly string _rosterPath;
     private FileSystemWatcher? _watcher;
@@ -130,6 +133,10 @@ public class RosterService
     /// </remarks>
     public string? Pick(PickerSettings settings)
     {
+        // 喵~防御：设置对象不该是 null——所有调用方持有的都是同一份实例。
+        // 真传了 null 就在这里抛出带参数名的异常，而不是让后面某一行冒出难懂的 NullReferenceException。
+        ArgumentNullException.ThrowIfNull(settings);
+
         if (_names.Count == 0)
         {
             return null;
@@ -189,12 +196,17 @@ public class RosterService
     /// <summary>「不重复」模式下手动开始新一轮。</summary>
     public static void ResetRound(PickerSettings settings)
     {
+        // 喵~防御：和 Pick 一样，设置对象不允许为 null，早报错比晚报错好定位。
+        ArgumentNullException.ThrowIfNull(settings);
         settings.DrawnThisRound.Clear();
     }
 
     /// <summary>本轮还剩多少人没抽到。</summary>
     public int RemainingInRound(PickerSettings settings)
     {
+        // 喵~防御：设置对象不允许为 null，否则下面读 Mode 时就会崩。
+        ArgumentNullException.ThrowIfNull(settings);
+
         if (settings.Mode != PickMode.NoRepeat)
         {
             return _names.Count;

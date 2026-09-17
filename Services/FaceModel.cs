@@ -89,17 +89,25 @@ internal sealed class FaceModel : IDisposable
     /// <param name="scoreThreshold">分数阈值。越低找得越多，也越容易把花纹认成脸。</param>
     public List<FaceBox> Detect(byte[] bgra, int width, int height, float scoreThreshold)
     {
-        // 补边：等比缩到能塞进 640×640，剩下的地方填中性灰。
-        var zoom = Math.Min(InputSize / (double)width, InputSize / (double)height);
-        var fitW = Math.Max(1, (int)Math.Round(width * zoom));
-        var fitH = Math.Max(1, (int)Math.Round(height * zoom));
-        var padX = (InputSize - fitW) / 2;
-        var padY = (InputSize - fitH) / 2;
+        // 喵~防御：像素数组为空、尺寸非正、或长度根本装不下这一帧时，
+        // 下面的采样会越界读取。这里直接返回空结果（当成「没检出人脸」），
+        // 由上层走「退回按名单抽」的分支，而不是抛异常把整次抽人搞崩。
+        if (bgra is null || width <= 0 || height <= 0 || bgra.Length < (long)width * height * 4)
+        {
+            return [];
+        }
 
-        FillInput(bgra, width, height, fitW, fitH, padX, padY);
+        // 补边：等比缩到能塞进 640×640，剩下的地方填中性灰。
+        // 具体怎么算、以及源尺寸非法时怎么兜底，都在 FaceGeometry 里（那条路径可以离线单测）。
+        var letterbox = FaceGeometry.ComputeLetterbox(width, height, InputSize);
+
+        // 把画面采样进输入张量：双线性缩放 + 补边 + 转 BGR planar，一趟走完。
+        FillInput(bgra, width, height, letterbox.FitWidth, letterbox.FitHeight,
+            letterbox.PadX, letterbox.PadY);
 
         using var results = _session.Run(_inputs);
-        return Decode(results, scoreThreshold, padX, padY, zoom);
+        // 解出的坐标要减掉补边、再按缩放倍数还原，才是原始画面里的像素位置。
+        return Decode(results, scoreThreshold, letterbox.PadX, letterbox.PadY, letterbox.Zoom);
     }
 
     /// <summary>

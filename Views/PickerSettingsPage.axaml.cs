@@ -64,6 +64,228 @@ public partial class PickerSettingsPage : SettingsPageBase, INotifyPropertyChang
 
     #endregion
 
+    #region 抽选动画
+
+    /// <summary>动画样式下拉框的选项文案。</summary>
+    /// <remarks>顺序必须和 <see cref="RevealAnimationStyle"/> 的枚举值一一对应，改了要两边一起改。</remarks>
+    public List<string> AnimationStyleNames { get; } =
+        ["无动画", "滚动名字", "CSGO 开箱", "老虎机", "拼多多转盘"];
+
+    /// <summary>下拉框当前选中的下标。</summary>
+    public int AnimationStyleIndex
+    {
+        // 枚举值本身就是下标。
+        get => (int)Settings.AnimationStyle;
+        set
+        {
+            // 喵~防御：下拉框理论上不会给出越界下标，但配置被手改坏时可能，直接忽略。
+            if (value < 0 || value > (int)RevealAnimationStyle.Wheel)
+            {
+                return;
+            }
+
+            Settings.AnimationStyle = (RevealAnimationStyle)value;
+            // 存盘并刷新说明文字，以及四个时长滑块各自的可用状态。
+            Save(nameof(AnimationSummary),
+                nameof(IsScrollStyle), nameof(IsCsgoStyle), nameof(IsSlotStyle), nameof(IsWheelStyle));
+        }
+    }
+
+    /// <summary>当前选的是不是滚动名字（决定对应那个时长滑块能不能拖）。</summary>
+    public bool IsScrollStyle => Settings.AnimationStyle == RevealAnimationStyle.Scroll;
+
+    /// <summary>当前选的是不是 CSGO 开箱。</summary>
+    public bool IsCsgoStyle => Settings.AnimationStyle == RevealAnimationStyle.Csgo;
+
+    /// <summary>当前选的是不是老虎机。</summary>
+    public bool IsSlotStyle => Settings.AnimationStyle == RevealAnimationStyle.Slot;
+
+    /// <summary>当前选的是不是转盘。</summary>
+    public bool IsWheelStyle => Settings.AnimationStyle == RevealAnimationStyle.Wheel;
+
+    /// <summary>样式下面那行说明。</summary>
+    public string AnimationSummary => Settings.AnimationStyle switch
+    {
+        RevealAnimationStyle.None => "抽完直接出结果，没有动画。",
+        RevealAnimationStyle.Scroll => "中央大字快速换名字，线性减速后定格。",
+        RevealAnimationStyle.Csgo => "名字方块横向滚过，指针停在中间那一个上。",
+        RevealAnimationStyle.Slot => "逐格抽字，每格从还有可能的字里挑。名单里一旦有超过四个字的名字，会自动改用滚动名字。",
+        RevealAnimationStyle.Wheel => "指针先停在两个名字的缝上，再滑进中选的那一格。",
+        _ => string.Empty
+    };
+
+    /// <summary>滚动名字的时长，单位：秒。</summary>
+    public double ScrollDuration
+    {
+        get => Settings.ScrollDurationSeconds;
+        set
+        {
+            // 保留一位小数，滑块的刻度就是 0.5。
+            Settings.ScrollDurationSeconds = Math.Round(value, 1);
+            Save(nameof(ScrollDurationText));
+        }
+    }
+
+    /// <summary>滚动名字时长的显示文字。</summary>
+    public string ScrollDurationText => $"{Settings.ScrollDurationSeconds:F1} 秒";
+
+    /// <summary>CSGO 开箱的时长，单位：秒。</summary>
+    public double CsgoDuration
+    {
+        get => Settings.CsgoDurationSeconds;
+        set
+        {
+            Settings.CsgoDurationSeconds = Math.Round(value, 1);
+            Save(nameof(CsgoDurationText));
+        }
+    }
+
+    /// <summary>CSGO 开箱时长的显示文字。</summary>
+    public string CsgoDurationText => $"{Settings.CsgoDurationSeconds:F1} 秒";
+
+    /// <summary>老虎机每一格的时长，单位：秒。</summary>
+    public double SlotStep
+    {
+        get => Settings.SlotStepSeconds;
+        set
+        {
+            Settings.SlotStepSeconds = Math.Round(value, 1);
+            Save(nameof(SlotStepText));
+        }
+    }
+
+    /// <summary>老虎机每格时长的显示文字。</summary>
+    public string SlotStepText => $"{Settings.SlotStepSeconds:F1} 秒/格";
+
+    /// <summary>转盘转到边界的时长，单位：秒。</summary>
+    public double WheelDuration
+    {
+        get => Settings.WheelDurationSeconds;
+        set
+        {
+            Settings.WheelDurationSeconds = Math.Round(value, 1);
+            Save(nameof(WheelDurationText));
+        }
+    }
+
+    /// <summary>转盘时长的显示文字。</summary>
+    public string WheelDurationText => $"{Settings.WheelDurationSeconds:F1} 秒";
+
+    /// <summary>CSGO 动画里各档品质的名字，给设置页那几个滑块当标题用。</summary>
+    /// <remarks>顺序必须和 <see cref="ItemRarity"/> 的枚举一致，改了要两边一起改。</remarks>
+    public List<string> RarityNames { get; } =
+        ItemRarityTable.Tiers.Select(tier => tier.Name).ToList();
+
+    /// <summary>某一档品质的默认权重（百分数）。</summary>
+    /// <param name="index">档位下标，0 是最常见的军规级。</param>
+    public double RarityWeightOf(int index) => ItemRarityTable.DefaultWeightOf((ItemRarity)index);
+
+    /// <summary>某一档品质当前配的权重（百分数）。</summary>
+    /// <param name="index">档位下标。</param>
+    /// <remarks>
+    /// 喵~防御：配置被手改坏、<c>RarityWeights</c> 长度不足时返回默认值，
+    /// 而不是让设置页直接抛异常打不开。
+    /// </remarks>
+    public double RarityWeight(int index) =>
+        Settings.RarityWeights is { } weights && index >= 0 && index < weights.Count
+            ? weights[index]
+            : RarityWeightOf(index);
+
+    /// <summary>把某一档的权重写回去。</summary>
+    /// <param name="index">档位下标。</param>
+    /// <param name="value">新的权重（百分数）。</param>
+    /// <remarks>
+    /// 五个滑块各自独立写入，不做归一化：用户可以把总数拖成任何值，
+    /// 抽的时候按相对比例算。这样调概率时不用一边拖一边心算总和。
+    /// </remarks>
+    public void SetRarityWeight(int index, double value)
+    {
+        // 喵~防御：越界下标直接忽略，别把整个列表改坏。
+        if (index < 0 || index >= ItemRarityTable.Tiers.Count)
+        {
+            return;
+        }
+
+        // 配置里的列表长度不足时先补齐，免得后面按下标写入时越界。
+        while (Settings.RarityWeights.Count <= index)
+        {
+            Settings.RarityWeights.Add(0);
+        }
+
+        // 保留两位小数：0.26% 这种值只留一位就没了。
+        Settings.RarityWeights[index] = Math.Round(value, 2);
+        Save(nameof(RaritySummary), nameof(RarityWeight0), nameof(RarityWeight1),
+            nameof(RarityWeight2), nameof(RarityWeight3), nameof(RarityWeight4));
+    }
+
+    /// <summary>各档权重的显示值，给界面绑定用。</summary>
+    public double RarityWeight0
+    {
+        get => RarityWeight(0);
+        set => SetRarityWeight(0, value);
+    }
+
+    /// <summary>第二档（受限级）的权重。</summary>
+    public double RarityWeight1
+    {
+        get => RarityWeight(1);
+        set => SetRarityWeight(1, value);
+    }
+
+    /// <summary>第三档（保密级）的权重。</summary>
+    public double RarityWeight2
+    {
+        get => RarityWeight(2);
+        set => SetRarityWeight(2, value);
+    }
+
+    /// <summary>第四档（隐秘级）的权重。</summary>
+    public double RarityWeight3
+    {
+        get => RarityWeight(3);
+        set => SetRarityWeight(3, value);
+    }
+
+    /// <summary>第五档（罕见特殊物品）的权重。</summary>
+    public double RarityWeight4
+    {
+        get => RarityWeight(4);
+        set => SetRarityWeight(4, value);
+    }
+
+    /// <summary>各档权重的显示文字。</summary>
+    public List<string> RarityWeightTexts =>
+        ItemRarityTable.Tiers
+            .Select((tier, index) => $"{tier.Name} {RarityWeight(index):0.##}%")
+            .ToList();
+
+    /// <summary>品质那一段下面的说明。</summary>
+    public string RaritySummary
+    {
+        get
+        {
+            // 把当前权重按相对比例换算成「每几抽见一次」，比一串百分数直观得多。
+            var buckets = ItemRarityTable.ToBuckets(Settings.RarityWeights);
+            var total = buckets.Sum();
+            if (total <= 0)
+            {
+                // 全是 0 的时候抽不出来，抽的时候会退回最常见那一档。
+                return "五个权重全是 0，抽的时候会一律按军规级处理。";
+            }
+
+            // 逐档算出「平均几抽见一次」。
+            var parts = ItemRarityTable.Tiers
+                .Select((tier, index) => buckets[index] <= 0
+                    ? $"{tier.Name} 不出"
+                    : $"{tier.Name} 约 1/{total / (double)buckets[index]:0} 抽")
+                .ToList();
+
+            return "只影响方块颜色，不影响抽到谁。" + string.Join("　", parts);
+        }
+    }
+
+    #endregion
+
     #region 摄像头
 
     public List<string> CameraNames { get; private set; } = [];
@@ -315,8 +537,72 @@ public partial class PickerSettingsPage : SettingsPageBase, INotifyPropertyChang
     /// <summary>写盘并通知界面。数值类设置改完都走这儿。</summary>
     private void Save(params string[] alsoChanged)
     {
-        _service?.SaveSettings();
+        // 打个标记：这次落盘是自己引起的，回声不用再刷一遍自己。
+        // 不这么做的话，拖滑块时每动一格都会触发一次「重读全部设置」，
+        // 滑块会被刚落盘的四舍五入值拽回去，手感一顿一顿的。
+        _savingFromPage = true;
+        try
+        {
+            _service?.SaveSettings();
+        }
+        finally
+        {
+            _savingFromPage = false;
+        }
+
         Raise(alsoChanged);
+    }
+
+    /// <summary>自己正在写盘。</summary>
+    private bool _savingFromPage;
+
+    /// <summary>设置从别处（悬浮钮右键菜单）被改了。</summary>
+    private void OnSettingsSaved(object? sender, EventArgs e)
+    {
+        // 自己改的不算「别处」，跳过——理由见 <see cref="Save"/>。
+        if (_savingFromPage)
+        {
+            return;
+        }
+
+        // 把和设置有关的那几个绑定全部重读一遍。
+        // 界面是按 PropertyChanged 重读的，所以这里只要喊一声，控件就会自己回去取值。
+        Raise(nameof(AnimationStyleIndex), nameof(AnimationSummary),
+            nameof(IsScrollStyle), nameof(IsCsgoStyle), nameof(IsSlotStyle), nameof(IsWheelStyle),
+            nameof(ScrollDuration), nameof(ScrollDurationText),
+            nameof(CsgoDuration), nameof(CsgoDurationText),
+            nameof(SlotStep), nameof(SlotStepText),
+            nameof(WheelDuration), nameof(WheelDurationText),
+            nameof(RarityWeight0), nameof(RarityWeight1), nameof(RarityWeight2),
+            nameof(RarityWeight3), nameof(RarityWeight4), nameof(RaritySummary),
+            nameof(RosterSummary), nameof(SeparateTextRoster), nameof(SavePhotos), nameof(UseTiled));
+    }
+
+    /// <summary>
+    /// 页面挂进可视树时开始听设置改动。
+    /// </summary>
+    /// <remarks>
+    /// 在挂载/卸载里订阅而不是构造函数里，是因为设置窗口可能反复开关、重建页面实例。
+    /// 在构造函数里订阅而不取消，会让已经作废的页面一直被宿主服务引用着，是一次真泄漏。
+    /// </remarks>
+    protected override void OnAttachedToVisualTree(Avalonia.VisualTreeAttachmentEventArgs e)
+    {
+        base.OnAttachedToVisualTree(e);
+        if (_service is not null)
+        {
+            _service.SettingsSaved += OnSettingsSaved;
+        }
+    }
+
+    /// <summary>页面离开可视树时停止监听。</summary>
+    protected override void OnDetachedFromVisualTree(Avalonia.VisualTreeAttachmentEventArgs e)
+    {
+        if (_service is not null)
+        {
+            _service.SettingsSaved -= OnSettingsSaved;
+        }
+
+        base.OnDetachedFromVisualTree(e);
     }
 
     private void Raise(params string[] names)
