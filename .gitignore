@@ -1,4 +1,5 @@
 bin/
 obj/
+cipx/
 *.user
 .vs/

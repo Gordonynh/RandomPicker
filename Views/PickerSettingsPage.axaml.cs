@@ -60,7 +60,11 @@ public partial class PickerSettingsPage : SettingsPageBase, INotifyPropertyChang
 
     public string RosterSummary => _service is null
         ? "插件未就绪。"
-        : $"{_service.RosterPath}\n一行一个名字，保存后立即生效。";
+        : $"{_service.RosterPath}\n一行一个名字，保存后立即生效。行尾可带小组 id（张三 G1）。";
+
+    public string GroupSummary => _service is null
+        ? "插件未就绪。"
+        : $"{_service.GroupsPath}\n当前 {_service.Groups?.Groups.Count ?? 0} 个小组。一行一个组，格式「G1 第一组」。";
 
     #endregion
 
@@ -272,6 +276,23 @@ public partial class PickerSettingsPage : SettingsPageBase, INotifyPropertyChang
         try
         {
             Process.Start(new ProcessStartInfo(_service.RosterPath) { UseShellExecute = true });
+        }
+        catch (Exception)
+        {
+            // 没有关联程序就算了，路径就写在上面。
+        }
+    }
+
+    private void OnOpenGroups(object? sender, RoutedEventArgs e)
+    {
+        if (_service is null)
+        {
+            return;
+        }
+
+        try
+        {
+            Process.Start(new ProcessStartInfo(_service.GroupsPath) { UseShellExecute = true });
         }
         catch (Exception)
         {

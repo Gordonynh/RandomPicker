@@ -9,7 +9,7 @@
         <OutputType>Library</OutputType>
         <AssemblyName>ClassIsland.RandomPicker</AssemblyName>
         <RootNamespace>ClassIsland.RandomPicker</RootNamespace>
-        <Version>1.1.0.0</Version>
+        <Version>1.2.0.0</Version>
         <!-- 同 UltraCode 插件：依赖一律用宿主已加载的那份，插件包里不能再带一份。 -->
         <GenerateDependencyFile>false</GenerateDependencyFile>
         <GenerateRuntimeConfigurationFiles>false</GenerateRuntimeConfigurationFiles>
@@ -67,5 +67,58 @@
         <None Include="README.md" CopyToOutputDirectory="PreserveNewest" />
         <None Include="icon.png" CopyToOutputDirectory="PreserveNewest" Condition="Exists('icon.png')" />
     </ItemGroup>
+
+    <!-- 每次 Build 顺手打插件包：cipx/ClassIsland.RandomPicker.cipx，拖进 ClassIsland 窗口就能装。
+
+         为什么不用官方 ClassIsland.PluginSdk 自带的 CreateCipx 目标：
+         1. 它压的是整个 $(OutputPath)，而本插件的输出目录里会跟着出现
+            ClassIsland.Shared.dll / ClassIsland.Shared.IPC.dll / ClassIsland.Platforms.Abstractions.dll
+            （ClassIsland.Core 的工程引用带进来的宿主程序集）—— 违反「宿主已有的不进包」。
+         2. 它打包后还要跑 pwsh 生成 checksums.md，Linux 上没有 pwsh，会直接把构建搞挂；
+            而宿主安装插件（PluginService）只是解压 zip + 读根部 manifest.yml，从不校验这个文件。
+         所以这里按白名单打：插件 dll + manifest/README/图标 + pack-include.txt 列的随包依赖，
+         用中转目录把文件压平到 zip 根部（宿主要求根部直接是 manifest.yml）。 -->
+    <PropertyGroup>
+        <CreateCipx>true</CreateCipx>
+    </PropertyGroup>
+
+    <Target Name="CreateCipx" AfterTargets="Build" Condition="'$(CreateCipx)' == 'true'">
+        <PropertyGroup>
+            <_CipxDir>$([MSBuild]::NormalizePath('$(MSBuildProjectDirectory)', 'cipx'))</_CipxDir>
+            <_CipxStage>$([MSBuild]::NormalizePath('$(_CipxDir)', 'stage'))</_CipxStage>
+            <_CipxPath>$([MSBuild]::NormalizePath('$(_CipxDir)', '$(MSBuildProjectName).cipx'))</_CipxPath>
+        </PropertyGroup>
+
+        <ReadLinesFromFile File="$(MSBuildProjectDirectory)/pack-include.txt">
+            <Output TaskParameter="Lines" ItemName="_PackIncludeLines" />
+        </ReadLinesFromFile>
+
+        <ItemGroup>
+            <!-- 清单里的注释行（# 开头）和空行跳过。
+                 注意：这里不能用 Exclude="#*" —— 实测 MSBuild 的 Exclude 过滤不掉
+                 ReadLinesFromFile 读进来的行（连 Microsoft* 都匹配不上），
+                 只有建条目时的 Condition 可靠。 -->
+            <_PackInclude Include="@(_PackIncludeLines)"
+                          Condition="!$([System.String]::Copy('%(_PackIncludeLines.Identity)').Trim().StartsWith('#')) and '%(_PackIncludeLines.Identity)' != ''" />
+            <_CipxFile Include="$(TargetPath)" />
+            <_CipxFile Include="$(TargetDir)manifest.yml" />
+            <_CipxFile Include="$(TargetDir)README.md" />
+            <_CipxFile Include="$(TargetDir)icon.png" Condition="Exists('$(TargetDir)icon.png')" />
+            <_CipxFile Include="$(TargetDir)%(_PackInclude.Identity)"
+                       Condition="'%(_PackInclude.Identity)' != ''" />
+        </ItemGroup>
+
+        <!-- pack-include.txt 里列了却不在输出目录 = 引用 / CopyToOutputDirectory / 清单
+             三处同步漏改了一处，直接报错，别把缺文件的包发出去。 -->
+        <Error Condition="!Exists('%(_CipxFile.Identity)')"
+               Text="打包失败：%(_CipxFile.Identity) 不在输出目录，检查 pack-include.txt 与 csproj 是否同步。" />
+
+        <RemoveDir Directories="$(_CipxStage)" />
+        <MakeDir Directories="$(_CipxStage)" />
+        <Copy SourceFiles="@(_CipxFile)" DestinationFolder="$(_CipxStage)" />
+        <ZipDirectory SourceDirectory="$(_CipxStage)" DestinationFile="$(_CipxPath)" Overwrite="true" />
+        <RemoveDir Directories="$(_CipxStage)" />
+        <Message Importance="high" Text="已生成插件包 $(_CipxPath)" />
+    </Target>
 
 </Project>

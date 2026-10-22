@@ -17,14 +17,14 @@ using ClassIsland.RandomPicker.Services;
 namespace ClassIsland.RandomPicker.Views;
 
 /// <summary>
-/// 抽人用的小悬浮窗：一个圆钮，按一下抽一个，右键（或触摸长按）出设置菜单。
+/// 抽选用的小悬浮窗：左键按一下弹菜单选「抽个人 / 抽小组」，右键（或触摸长按）出设置菜单。
 /// </summary>
 /// <remarks>
-/// 交互上要同时容纳三件事——点击抽人、拖动挪窝、唤出菜单：
+/// 交互上要同时容纳三件事——点击弹抽选菜单、拖动挪窝、唤出设置菜单：
 /// <list type="bullet">
-/// <item>按下后没怎么动就松开 → 抽人</item>
+/// <item>按下后没怎么动就松开 → 弹抽选菜单，选「抽个人」还是「抽小组」</item>
 /// <item>移动超过阈值 → 转成拖窗口，松手时不触发抽选</item>
-/// <item>右键，或者触摸按住不动超过 <see cref="HoldMilliseconds"/> → 菜单</item>
+/// <item>右键，或者触摸按住不动超过 <see cref="HoldMilliseconds"/> → 设置菜单</item>
 /// </list>
 /// 拖动范围夹在当前屏幕内，可以压在任务栏上，但拖不出屏幕。
 /// </remarks>
@@ -38,6 +38,7 @@ public class PickerWindow : Window
 
     private readonly PickerSettings _settings;
     private readonly RosterService _roster;
+    private readonly GroupService _groups;
     private readonly Border _knob;
     private readonly TextBlock _label;
     private readonly TextBlock _counter;
@@ -45,6 +46,9 @@ public class PickerWindow : Window
 
     /// <summary>设置菜单。复用同一个实例，每次打开前换 ItemsSource。</summary>
     private MenuFlyout? _menu;
+
+    /// <summary>左键弹出的抽选菜单（抽个人 / 抽小组）。同样复用实例。</summary>
+    private MenuFlyout? _pickMenu;
 
     /// <summary>当前被本窗口捕获的指针。长按弹菜单前要把它放掉。</summary>
     private IPointer? _capturedPointer;
@@ -56,10 +60,11 @@ public class PickerWindow : Window
     private Point _pressOrigin;
     private PixelPoint _grabOffset;
 
-    public PickerWindow(PickerSettings settings, RosterService roster)
+    public PickerWindow(PickerSettings settings, RosterService roster, GroupService groups)
     {
         _settings = settings;
         _roster = roster;
+        _groups = groups;
 
         SystemDecorations = SystemDecorations.None;
         Background = null;
@@ -142,6 +147,9 @@ public class PickerWindow : Window
 
     /// <summary>用户请求抽一个人。</summary>
     public event EventHandler? PickRequested;
+
+    /// <summary>用户请求抽一个小组。</summary>
+    public event EventHandler? PickGroupRequested;
 
     /// <summary>设置被菜单改动，需要持久化。</summary>
     public event EventHandler? SettingsChanged;
@@ -420,7 +428,9 @@ public class PickerWindow : Window
         }
         else if (e.InitialPressMouseButton is MouseButton.Left or MouseButton.None)
         {
-            PickRequested?.Invoke(this, EventArgs.Empty);
+            // 左键不再直接抽，先弹菜单让选「抽个人 / 抽小组」。
+            // 指针捕获在上面已经放掉了，弹出层才点得动（同 ShowMenu 的处理）。
+            ShowPickMenu();
         }
 
         e.Handled = true;
@@ -457,6 +467,49 @@ public class PickerWindow : Window
         _menu.ShowAt(_knob, showAtPointer: true);
     }
 
+    /// <summary>
+    /// 左键弹出的抽选菜单：选这次抽个人还是抽小组。
+    /// </summary>
+    private void ShowPickMenu()
+    {
+        _pickMenu ??= new MenuFlyout();
+        _pickMenu.ItemsSource = BuildPickMenuItems();
+        _pickMenu.ShowAt(_knob, showAtPointer: true);
+    }
+
+    /// <summary>
+    /// 抽选菜单内容：一行状态 + 两个动作。
+    /// </summary>
+    private object[] BuildPickMenuItems() =>
+    [
+        Header(BuildHeader()),
+        Item("抽个人", () => PickRequested?.Invoke(this, EventArgs.Empty)),
+        Item("抽小组", () => PickGroupRequested?.Invoke(this, EventArgs.Empty))
+    ];
+
+    /// <summary>
+    /// 菜单顶部的状态行：人数和组数一起报。
+    /// </summary>
+    private string BuildHeader()
+    {
+        var personPart = _settings.Mode == PickMode.Photo
+            ? "拍照抽人"
+            : _roster.Names.Count == 0
+                ? "名单是空的"
+                : _settings.Mode == PickMode.NoRepeat
+                    ? $"本轮还剩 {_roster.RemainingInRound(_settings)} / {_roster.Names.Count} 人"
+                    : $"共 {_roster.Names.Count} 人";
+
+        var groupCount = _groups.Groups.Count;
+        var groupPart = groupCount == 0
+            ? "小组名单是空的"
+            : _settings.Mode == PickMode.NoRepeat
+                ? $"本轮还剩 {_groups.RemainingInRound(_settings)} / {groupCount} 组"
+                : $"共 {groupCount} 组";
+
+        return $"{personPart} · {groupPart}";
+    }
+
     /// <summary>单选组的组名。三组必须各不相同，否则会被归成一组互相抢。</summary>
     private const string ModeGroup = "picker.mode";
 
@@ -468,19 +521,11 @@ public class PickerWindow : Window
     /// </summary>
     private object[] BuildMenuItems()
     {
-        var total = _roster.Names.Count;
-        var remaining = _roster.RemainingInRound(_settings);
-
         return
         [
-            Header(_settings.Mode == PickMode.Photo
-                ? "拍照抽人"
-                : total == 0
-                    ? "名单是空的"
-                    : _settings.Mode == PickMode.NoRepeat
-                        ? $"本轮还剩 {remaining} / {total} 人"
-                        : $"共 {total} 人"),
-            Item("抽一个", () => PickRequested?.Invoke(this, EventArgs.Empty)),
+            Header(BuildHeader()),
+            Item("抽个人", () => PickRequested?.Invoke(this, EventArgs.Empty)),
+            Item("抽小组", () => PickGroupRequested?.Invoke(this, EventArgs.Empty)),
             new Separator(),
 
             Choice("随机抽选", ModeGroup, _settings.Mode == PickMode.Random,
@@ -492,6 +537,7 @@ public class PickerWindow : Window
             Item("开始新一轮", () =>
             {
                 RosterService.ResetRound(_settings);
+                GroupService.ResetRound(_settings);
                 RefreshCounter();
                 SettingsChanged?.Invoke(this, EventArgs.Empty);
             }),
@@ -503,6 +549,8 @@ public class PickerWindow : Window
                 _roster.Reload();
                 RefreshCounter();
             }),
+            Item("打开小组文件", OpenGroupsFile),
+            Item("重新载入小组", () => _groups.Reload()),
             new Separator(),
 
             new MenuItem
@@ -636,12 +684,25 @@ public class PickerWindow : Window
         }
     }
 
+    private void OpenGroupsFile()
+    {
+        try
+        {
+            Process.Start(new ProcessStartInfo(_groups.GroupsPath) { UseShellExecute = true });
+        }
+        catch (Exception)
+        {
+            // 没有关联程序就算了。
+        }
+    }
+
     #endregion
 
     protected override void OnClosed(EventArgs e)
     {
         _holdTimer.Stop();
         _menu?.Hide();
+        _pickMenu?.Hide();
         _topmost?.Dispose();
         base.OnClosed(e);
     }

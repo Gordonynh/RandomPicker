@@ -14,11 +14,17 @@ namespace ClassIsland.RandomPicker.Services;
 /// <remarks>
 /// 名单就是一个纯文本文件，一行一个名字。没有引号、没有 JSON、没有转义，
 /// 用记事本就能改。空行和以 <c>#</c> 开头的行会被忽略，重复的名字只算一个。
+/// <para/>
+/// 行尾还可以带一个小组 id（<c>张三 G1</c>）：最后一个空白分隔的 token 是小组 id，
+/// 之前的整体都是姓名。单个 token 的行就是不带小组的老名单，行为完全不变。
 /// </remarks>
 public class RosterService
 {
+    private static readonly char[] Whitespace = [' ', '\t'];
+
     private readonly string _rosterPath;
     private FileSystemWatcher? _watcher;
+    private List<RosterEntry> _entries = new();
     private List<string> _names = new();
 
     public RosterService(string rosterPath)
@@ -34,6 +40,9 @@ public class RosterService
 
     /// <summary>当前名单。</summary>
     public IReadOnlyList<string> Names => _names;
+
+    /// <summary>当前名单，带行尾解析出来的小组 id。</summary>
+    public IReadOnlyList<RosterEntry> Entries => _entries;
 
     /// <summary>名单文件发生变化并重新载入后触发。</summary>
     public event EventHandler? RosterChanged;
@@ -56,6 +65,7 @@ public class RosterService
         [
             "# 一行一个名字，保存后自动生效。",
             "# 以 # 开头的行和空行会被忽略。",
+            "# 带小组：行尾再写一个小组 id，如「张三 G1」，小组名单在 小组.txt。",
             "",
             "张三",
             "李四",
@@ -74,16 +84,42 @@ public class RosterService
                 ? File.ReadAllLines(_rosterPath, Encoding.UTF8)
                 : [];
 
-            _names = lines
+            _entries = lines
                 .Select(x => x.Trim())
                 .Where(x => x.Length > 0 && !x.StartsWith('#'))
-                .Distinct(StringComparer.Ordinal)
+                .Select(ParseEntry)
+                // 重复的名字只算一个，小组归属取第一次出现的那行。
+                .DistinctBy(x => x.Name, StringComparer.Ordinal)
                 .ToList();
+            _names = _entries.Select(x => x.Name).ToList();
         }
         catch (IOException)
         {
             // 多半是保存的瞬间被占用了，保留上一次的名单，下一次变更再读。
         }
+    }
+
+    /// <summary>
+    /// 把一行拆成姓名 + 可选的小组 id。
+    /// </summary>
+    /// <remarks>
+    /// id 取<b>最后一个</b>空白分隔的 token，之前的整体都是姓名——
+    /// 姓名里带空格（比如外教的英文名）时只有最后一段会被当成 id，
+    /// 而按约定 id 是不带空格的，所以这个方向拆不会把姓名切碎。
+    /// </remarks>
+    private static RosterEntry ParseEntry(string line)
+    {
+        var splitAt = line.LastIndexOfAny(Whitespace);
+        if (splitAt <= 0)
+        {
+            return new RosterEntry(line, null);
+        }
+
+        var name = line[..splitAt].Trim();
+        var groupId = line[(splitAt + 1)..].Trim();
+        return name.Length == 0 || groupId.Length == 0
+            ? new RosterEntry(line, null)
+            : new RosterEntry(name, groupId);
     }
 
     private void StartWatching()
@@ -186,6 +222,17 @@ public class RosterService
         return pool.Count > 0 ? pool : [.._names];
     }
 
+    public string? PeekRandom(PickerSettings settings)
+    {
+        if (_names.Count == 0)
+        {
+            return null;
+        }
+
+        var candidates = BuildCandidates(settings);
+        return candidates.Count > 0 ? candidates[RandomNumberGenerator.GetInt32(candidates.Count)] : null;
+    }
+
     /// <summary>「不重复」模式下手动开始新一轮。</summary>
     public static void ResetRound(PickerSettings settings)
     {
@@ -219,3 +266,6 @@ public class RosterService
         _watcher = null;
     }
 }
+
+/// <summary>名单里的一行：姓名 + 可选的小组 id（<c>张三 G1</c> 里的 <c>G1</c>）。</summary>
+public sealed record RosterEntry(string Name, string? GroupId);

@@ -63,6 +63,11 @@ public class RevealWindow : Window
         Ensure(hold, accent, height * 0.2).ShowPortrait(portrait, caption, height, hold, accent);
     }
 
+    public static void Flash(string text, Color accent)
+    {
+        Ensure(TimeSpan.FromSeconds(1), accent, 48).FlashText(text, accent);
+    }
+
     /// <summary>拿到可用的窗口实例：已经开着就复用，否则新建。</summary>
     private static RevealWindow Ensure(TimeSpan hold, Color accent, double fontSize)
     {
@@ -187,6 +192,24 @@ public class RevealWindow : Window
         _card.CornerRadius = new CornerRadius(fontSize * 0.18);
         _card.Padding = new Thickness(fontSize * 0.62, fontSize * 0.34);
         Bump(hold, accent);
+    }
+
+    private void FlashText(string text, Color accent)
+    {
+        _portrait.IsVisible = false;
+        _portrait.Source = null;
+        _caption.IsVisible = false;
+        _nameText.IsVisible = true;
+        _nameText.Text = text;
+        _nameText.FontSize = 48;
+
+        _card.CornerRadius = new CornerRadius(48 * 0.18);
+        _card.Padding = new Thickness(48 * 0.62, 48 * 0.34);
+        _card.BorderBrush = new SolidColorBrush(accent, 0.55);
+        _card.Opacity = 1;
+        _card.RenderTransform = TransformOperations.Parse("scale(1)");
+        _closeTimer.Stop();
+        _topmost?.Reassert();
     }
 
     /// <summary>复用当前窗口显示一张人像。</summary>

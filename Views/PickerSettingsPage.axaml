@@ -7,7 +7,7 @@
         <StackPanel Classes="settings-container animated-intro">
 
             <TextBlock Classes="l-instructive" TextWrapping="Wrap"
-                       Text="日常操作在悬浮窗右键菜单。此页配置拍照抽人：拍摄合影，从中随机抽取一人。"/>
+                       Text="日常操作在悬浮窗：左键点一下弹菜单选「抽个人 / 抽小组」，右键开设置菜单。此页配置拍照抽人：拍摄合影，从中随机抽取一人。"/>
 
             <Separator Margin="0 12 0 4"/>
             <ci:IconText Glyph="&#xE8A5;" Text="名单" Margin="0 0 0 4"/>
@@ -17,6 +17,22 @@
                                        Description="{Binding RosterSummary}">
                 <controls:SettingsExpander.Footer>
                     <Button Click="OnOpenRoster">
+                        <ci:IconText Glyph="&#xE8E5;" Text="打开"/>
+                    </Button>
+                </controls:SettingsExpander.Footer>
+            </controls:SettingsExpander>
+
+            <Separator Margin="0 12 0 4"/>
+            <ci:IconText Glyph="&#xE716;" Text="小组" Margin="0 0 0 4"/>
+
+            <TextBlock Classes="l-instructive" TextWrapping="Wrap"
+                       Text="成员写在名单文件行尾：「张三 G1」，最后一段是小组 id；小组名单文件只登记 id 和组名。保存后立即生效。"/>
+
+            <controls:SettingsExpander IconSource="{ci:FluentIconSource &#xE716;}"
+                                       Header="小组名单文件"
+                                       Description="{Binding GroupSummary}">
+                <controls:SettingsExpander.Footer>
+                    <Button Click="OnOpenGroups">
                         <ci:IconText Glyph="&#xE8E5;" Text="打开"/>
                     </Button>
                 </controls:SettingsExpander.Footer>

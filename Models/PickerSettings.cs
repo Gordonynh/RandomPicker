@@ -65,6 +65,18 @@ public class PickerSettings
     /// <summary>上一次抽到的人，用于「随机抽选」模式回避连抽同一个。</summary>
     public string? LastPicked { get; set; }
 
+    /// <summary>
+    /// 「不重复」模式下本轮已经抽到过的小组。
+    /// </summary>
+    /// <remarks>
+    /// 和个人的进度<b>分开记</b>：抽到的组名和人名完全可能撞成同一个字符串，
+    /// 共用一份列表会把对方的进度也一起抹掉。
+    /// </remarks>
+    public List<string> DrawnGroupsThisRound { get; set; } = new();
+
+    /// <summary>上一次抽到的小组，用于「随机抽选」模式回避连抽同组。</summary>
+    public string? LastPickedGroup { get; set; }
+
     #region 拍照抽人
 
     /// <summary>用哪个摄像头。空 = 用系统默认的第一个。</summary>

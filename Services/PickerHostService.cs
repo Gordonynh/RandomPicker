@@ -20,6 +20,7 @@ public class PickerHostService : IHostedService
 {
     private readonly string _settingsPath;
     private readonly string _rosterPath;
+    private readonly string _groupsPath;
     private readonly string _configFolder;
 
     /// <summary>拍照抽人正在跑。摄像头开一次要一两秒，这期间再点就直接忽略。</summary>
@@ -27,10 +28,15 @@ public class PickerHostService : IHostedService
 
     private PickerSettings _settings = new();
     private RosterService? _roster;
+    private GroupService? _groups;
     private PickerWindow? _window;
 
     /// <summary>上一条还在播的提醒。连着抽人时先把它取消掉，免得在主界面上排队堆积。</summary>
     private NotificationRequest? _lastRequest;
+
+    private bool _isFlashing;
+    private DispatcherTimer? _flashTimer;
+    private int _flashCount;
 
     public PickerHostService(string pluginConfigFolder)
     {
@@ -38,6 +44,8 @@ public class PickerHostService : IHostedService
         _settingsPath = Path.Combine(pluginConfigFolder, "settings.json");
         // 名单跟设置放一起。右键菜单里的「打开名单文件」直接把它交给记事本。
         _rosterPath = Path.Combine(pluginConfigFolder, "名单.txt");
+        // 小组名单同理：id → 组名，成员来自名单行尾的小组 id。
+        _groupsPath = Path.Combine(pluginConfigFolder, "小组.txt");
     }
 
     /// <summary>当前设置。设置页直接绑这上面。</summary>
@@ -45,6 +53,12 @@ public class PickerHostService : IHostedService
 
     /// <summary>名单文件路径。</summary>
     public string RosterPath => _rosterPath;
+
+    /// <summary>小组名单文件路径。</summary>
+    public string GroupsPath => _groupsPath;
+
+    /// <summary>小组服务。设置页拿它显示组数。</summary>
+    public GroupService? Groups => _groups;
 
     /// <summary>插件配置目录。拍照要存原图时用。</summary>
     public string ConfigFolder => _configFolder;
@@ -60,6 +74,8 @@ public class PickerHostService : IHostedService
     {
         _settings = PickerSettings.Load(_settingsPath);
         _roster = new RosterService(_rosterPath);
+        // 小组要聚合名单里的成员，所以必须在名单之后建。
+        _groups = new GroupService(_roster, _groupsPath);
 
         // 宿主启动 IHostedService 的时候 Avalonia 主窗口不一定已经就绪，
         // 用 Background 优先级排队，等 UI 空下来再开窗口。
@@ -76,6 +92,7 @@ public class PickerHostService : IHostedService
             _window?.Close();
             _window = null;
         });
+        _groups?.Dispose();
         _roster?.Dispose();
         // 摄像头可能还热着，一定要关掉，否则指示灯会一直亮。
         return CameraPicker.DisposeAllAsync();
@@ -83,13 +100,14 @@ public class PickerHostService : IHostedService
 
     private void ShowPickerWindow()
     {
-        if (_window is not null || _roster is null)
+        if (_window is not null || _roster is null || _groups is null)
         {
             return;
         }
 
-        _window = new PickerWindow(_settings, _roster);
+        _window = new PickerWindow(_settings, _roster, _groups);
         _window.PickRequested += (_, _) => Pick();
+        _window.PickGroupRequested += (_, _) => PickGroup();
         _window.SettingsChanged += (_, _) => SaveSettingsInternal();
         _window.HideRequested += (_, _) =>
         {
@@ -221,14 +239,82 @@ public class PickerHostService : IHostedService
             return;
         }
 
-        if (_settings.ShowCenterReveal)
+        if (_settings.ShowCenterReveal && !_isFlashing)
         {
-            Reveal(name, isHint: false, note);
+            StartFlash(
+                () => TextRoster.PeekRandom(_settings) ?? name,
+                () =>
+                {
+                    Reveal(name, isHint: false, note);
+                    if (_settings.ShowNotification)
+                    {
+                        SendNotification(name);
+                    }
+                });
+        }
+        else
+        {
+            if (_settings.ShowCenterReveal)
+            {
+                Reveal(name, isHint: false, note);
+            }
+
+            if (_settings.ShowNotification)
+            {
+                SendNotification(name);
+            }
+        }
+    }
+
+    /// <summary>
+    /// 抽一个小组：中央大字显示组名，组名下面用小字列出全部成员。
+    /// </summary>
+    /// <remarks>
+    /// ClassIsland 那条提醒只发组名——它是一行小字，塞下一串成员会把整条撑爆；
+    /// 成员小字只在中央大字里显示。
+    /// </remarks>
+    private void PickGroup()
+    {
+        if (_groups is null)
+        {
+            return;
         }
 
-        if (_settings.ShowNotification)
+        var group = _groups.Pick(_settings);
+        SaveSettingsInternal();
+        _window?.RefreshCounter();
+
+        if (group is null)
         {
-            SendNotification(name);
+            // 和空名单一个待遇：说清楚，别静悄悄什么都不发生。
+            Reveal("小组名单是空的", isHint: true);
+            return;
+        }
+
+        if (_settings.ShowCenterReveal && !_isFlashing)
+        {
+            StartFlash(
+                () => _groups!.PeekRandom(_settings)?.Name ?? group.Name,
+                () =>
+                {
+                    Reveal(group.Name, isHint: false, string.Join(" ", group.Members));
+                    if (_settings.ShowNotification)
+                    {
+                        SendNotification(group.Name);
+                    }
+                });
+        }
+        else
+        {
+            if (_settings.ShowCenterReveal)
+            {
+                Reveal(group.Name, isHint: false, string.Join(" ", group.Members));
+            }
+
+            if (_settings.ShowNotification)
+            {
+                SendNotification(group.Name);
+            }
         }
     }
 
@@ -245,6 +331,26 @@ public class PickerHostService : IHostedService
 
     private static readonly Avalonia.Media.Color DefaultAccent =
         Avalonia.Media.Color.FromRgb(0x5B, 0x8D, 0xEF);
+
+    private void StartFlash(Func<string> pickFlash, Action finalize)
+    {
+        _isFlashing = true;
+        _flashCount = 0;
+        _flashTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(100) };
+        _flashTimer.Tick += (_, _) =>
+        {
+            _flashCount++;
+            if (_flashCount >= 10)
+            {
+                _flashTimer.Stop();
+                _isFlashing = false;
+                finalize();
+                return;
+            }
+            RevealWindow.Flash(pickFlash(), _window?.Accent ?? DefaultAccent);
+        };
+        _flashTimer.Start();
+    }
 
     private void SendNotification(string name)
     {
