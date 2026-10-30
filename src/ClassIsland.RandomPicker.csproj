@@ -58,14 +58,27 @@
 
 
     <ItemGroup>
-        <ProjectReference Include="..\..\ClassIsland.Core\ClassIsland.Core.csproj"
+        <!-- 宿主源码在仓库外面两级：本插件放在 ClassIsland/plugins/RandomPicker/src。
+             只引用 Core，其余的由它自己带；Private=false 表示不复制到输出（宿主已加载）。 -->
+        <ProjectReference Include="..\..\..\ClassIsland.Core\ClassIsland.Core.csproj"
                           Private="false" ExcludeAssets="runtime" />
     </ItemGroup>
 
     <ItemGroup>
-        <None Include="manifest.yml" CopyToOutputDirectory="PreserveNewest" />
-        <None Include="README.md" CopyToOutputDirectory="PreserveNewest" />
-        <None Include="icon.png" CopyToOutputDirectory="PreserveNewest" Condition="Exists('icon.png')" />
+        <!-- 清单 / 图标 / 说明留在仓库根目录：README 在 GitHub 上要能直接看到，
+             清单和图标是插件包的元数据，不属于代码。这里用 Link 让它们照常复制到输出目录，
+             打包脚本从输出目录取，路径才不用改。
+
+             CopyToOutputDirectory 必须是 Always，不能是 PreserveNewest：
+             MSBuild 复制时会把源文件的修改时间一起带过去，于是「输出比源新」的判断
+             在改完清单后仍可能成立（编辑器保留旧时间戳、或时间精度只到秒），
+             结果是 dotnet build 一声不响地跳过复制，打出来的包还是上一个版本的清单。
+             实测踩过：清单写了 2.0.0.0，打出来的包里是 1.1.0.0。
+             这三个文件都是几 KB，每次构建重拷一遍完全无所谓。 -->
+        <None Include="..\manifest.yml" Link="manifest.yml" CopyToOutputDirectory="Always" />
+        <None Include="..\README.md" Link="README.md" CopyToOutputDirectory="Always" />
+        <None Include="..\icon.png" Link="icon.png" CopyToOutputDirectory="Always"
+              Condition="Exists('..\icon.png')" />
     </ItemGroup>
 
 </Project>

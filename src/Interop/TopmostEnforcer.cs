@@ -43,10 +43,13 @@ public sealed class TopmostEnforcer : IDisposable
     /// <summary>上一次让位之后有没有恢复置顶。避免每个 tick 都重复调同一个 SetWindowPos。</summary>
     private bool _yielded;
 
+    /// <summary>
+    /// 建一个「持续把窗口按在最上层」的定时器。调用 <see cref="Attach"/> 之后才开始。
+    /// </summary>
     /// <param name="window">要维持置顶的窗口。</param>
     /// <param name="interval">重申置顶的间隔。</param>
     /// <param name="preventActivation">
-    /// 是否加 <c>WS_EX_NOACTIVATE</c>。悬浮钮要（不抢别人的焦点），
+    /// 是否加 <c>WS_EX_NOACTIVATE</c>。悬浮球要（不抢别人的焦点），
     /// 但菜单窗口**不能**加——它靠失焦来自动关闭，拿不到焦点就永远关不掉。
     /// </param>
     /// <param name="exclusive">
@@ -105,12 +108,21 @@ public sealed class TopmostEnforcer : IDisposable
     /// <remarks>
     /// <b>有独占全屏窗口开着时会主动让位</b>，把自己降到普通层。
     /// 不这么做的话两边的定时器会互相把对方顶下去，画面一直闪；
-    /// 更要命的是悬浮钮一旦压在复原倒计时上面，用户点屏幕想取消，
+    /// 更要命的是悬浮球一旦压在复原倒计时上面，用户点屏幕想取消，
     /// 点到的会是「抽一个人」。
     /// </remarks>
     public void Reassert()
     {
         if (!OperatingSystem.IsWindows() || _handle == IntPtr.Zero)
+        {
+            return;
+        }
+
+        // 窗口被藏起来的时候绝对不要顶。SetWindowPos 的 SWP_SHOWWINDOW 会把已经
+        // Hide() 掉的原生窗口重新显示出来：屏幕上又出现了，但 Avalonia 这边仍认为它是
+        // 隐藏的 —— 看得见、点不着、也关不掉，就是那个「幽灵控件」。
+        // 所以隐藏期间直接跳过，等 Show() 回来之后定时器自然恢复重申。
+        if (!_window.IsVisible)
         {
             return;
         }

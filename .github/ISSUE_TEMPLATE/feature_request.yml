@@ -1,0 +1,59 @@
+name: 功能建议
+description: 想要的新能力，或者现有行为可以更好的地方
+title: "[建议] "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        先说清楚「想解决什么问题」比说「想加什么按钮」更有用 ——
+        有时候换个做法就能达到同样的目的，还不占菜单。
+
+  - type: textarea
+    id: idea
+    attributes:
+      label: 你希望它做什么
+      description: 一句话说清想要的效果。
+      placeholder: 想让抽中的人在屏幕上多停一会儿，方便下面的人记笔记。
+    validations:
+      required: true
+
+  - type: textarea
+    id: scene
+    attributes:
+      label: 什么时候会用到
+      description: 上课的哪个环节？多久一次？这一步能帮我们判断值不值得做。
+      placeholder: 每节课点名回答问题的时候，一节课大概抽五六次。
+    validations:
+      required: true
+
+  - type: textarea
+    id: now
+    attributes:
+      label: 现在是怎么应付的
+      description: 有没有绕开的办法？如果有，说明这件事对你有实际影响。
+    validations:
+      required: false
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: 涉及哪部分
+      options:
+        - 抽人 / 名单
+        - 抽组
+        - 拍照抽人
+        - 悬浮球与右键菜单
+        - 设置页
+        - 安装、升级、打包
+        - 说不准 / 其他
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: pr
+    attributes:
+      label: 补充
+      options:
+        - label: 如果实现起来不复杂，我愿意自己提 PR
+          required: false

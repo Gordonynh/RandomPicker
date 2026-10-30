@@ -1,0 +1,15 @@
+# Issue 模板的配置。见 https://docs.github.com/community/contributing/using-templates-to-encourage-useful-issues-and-pull-requests
+#
+# blank_issues_enabled: false —— 不让用户开空白 issue。
+# 表单里问的版本号、抽选来源这些，恰恰是最常被漏掉的信息，
+# 空白 issue 十有八九只写一句「抽不出来」，来回问三轮才能开始查。
+blank_issues_enabled: false
+
+contact_links:
+  - name: ClassIsland 本身的问题
+    url: https://github.com/ClassIsland/ClassIsland/issues
+    about: 课程表、提醒、主题、插件装不上（不是这个插件）这些属于宿主，请提到那边。
+
+  - name: 使用说明
+    url: https://github.com/Gordonynh/RandomPicker#readme
+    about: 菜单每一项干什么、名单怎么写、拍照抽人怎么用，README 里都有。先看一眼能省一轮往返。

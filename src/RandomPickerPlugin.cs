@@ -24,7 +24,7 @@ public class RandomPickerPlugin : PluginBase
         // PluginLoadContext 上挂解析回调，按路径把它加载进来。
         FaceModel.EnsureManagedResolvable(SelfAssembly);
 
-        // 提醒提供方：抽到人之后把名字推到 ClassIsland 主界面那条上。
+        // 提醒提供方：抽中之后把结果推到 ClassIsland 主界面那条上。
         services.AddNotificationProvider<PickerNotificationProvider>();
 
         // 插件主体。PluginConfigFolder 由宿主在实例化插件时填好，

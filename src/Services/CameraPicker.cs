@@ -47,8 +47,16 @@ public sealed class ShotResult
     /// <summary>摄像头是不是本来就热着（省掉了打开的那一两秒）。</summary>
     public bool WasWarm { get; init; }
 
-    /// <summary>抽中那个人的人像。</summary>
+    /// <summary>抽中那个人的人像。等于 <see cref="Portraits"/> 的第一张。</summary>
     public Bitmap? Portrait { get; init; }
+
+    /// <summary>
+    /// 一次抽多个人时的全部人像，按抽到的顺序排。
+    /// </summary>
+    /// <remarks>
+    /// 抽 1 个人时这里也只有一张。拍照失败时是空表。
+    /// </remarks>
+    public List<Bitmap> Portraits { get; init; } = new();
 
     /// <summary>整帧缩略图，检测框已经画上去了。设置页里用来核对。</summary>
     public Bitmap? Annotated { get; init; }
@@ -59,7 +67,7 @@ public sealed class ShotResult
 }
 
 /// <summary>
-/// 拍一张班级合影，检测里面的人，随机挑一个裁出人像。
+/// 拍一张班级合影，检测里面的人，随机挑出若干个裁成人像。
 /// </summary>
 /// <remarks>
 /// <b>取帧走 <see cref="MediaFrameReader"/>，不是 <c>CapturePhotoToStreamAsync</c>。</b>
@@ -108,14 +116,15 @@ internal static class CameraPicker
     }
 
     /// <summary>
-    /// 拍一张、检测、随机挑一个裁出来。
+    /// 拍一张、检测、随机挑出 N 个人并逐个裁出来。
     /// </summary>
     /// <param name="settings">插件设置。</param>
     /// <param name="pluginDirectory">插件目录，模型和 ONNX Runtime 都在这儿。</param>
     /// <param name="configFolder">要存原图时存到哪。</param>
     /// <param name="annotate">是否额外产出一张画了检测框的缩略图（设置页试拍时才要）。</param>
+    /// <param name="count">抽几个人。检出的人脸不够就少给几个。</param>
     public static async Task<ShotResult> CaptureAndPickAsync(PickerSettings settings,
-        string pluginDirectory, string configFolder, bool annotate = false)
+        string pluginDirectory, string configFolder, bool annotate = false, int count = 1)
     {
         await Gate.WaitAsync();
         try
@@ -187,13 +196,42 @@ internal static class CameraPicker
                 };
             }
 
-            var chosen = Choose(faces, width, height, settings);
-            var portrait = await CropAsync(pixels, width, height, Expand(chosen, width, height, settings));
+            var chosen = ChooseMany(faces, width, height, settings, count);
+
+            // 逐张裁。某一张裁失败就跳过，只要还有剩下的就算这次抽到了。
+            var portraits = new List<Bitmap>();
+            foreach (var face in chosen)
+            {
+                var cropped = await CropAsync(pixels, width, height, Expand(face, width, height, settings));
+                if (cropped is not null)
+                {
+                    portraits.Add(cropped);
+                }
+            }
+
+            if (portraits.Count == 0)
+            {
+                return new ShotResult
+                {
+                    Success = false,
+                    Message = "人脸裁切失败",
+                    FrameWidth = width,
+                    FrameHeight = height,
+                    FaceCount = faces.Count,
+                    OpenMs = openMs,
+                    CaptureMs = captureMs,
+                    DetectMs = detectMs,
+                    WasWarm = wasWarm,
+                    Annotated = annotated
+                };
+            }
 
             return new ShotResult
             {
                 Success = true,
-                Message = $"从 {faces.Count} 人中抽取一人",
+                Message = portraits.Count > 1
+                    ? $"从 {faces.Count} 人中抽取 {portraits.Count} 人"
+                    : $"从 {faces.Count} 人中抽取一人",
                 FrameWidth = width,
                 FrameHeight = height,
                 FaceCount = faces.Count,
@@ -201,7 +239,8 @@ internal static class CameraPicker
                 CaptureMs = captureMs,
                 DetectMs = detectMs,
                 WasWarm = wasWarm,
-                Portrait = portrait,
+                Portrait = portraits[0],
+                Portraits = portraits,
                 Annotated = annotated
             };
         }
@@ -604,9 +643,21 @@ internal static class CameraPicker
     /// 避开之后如果一个都不剩（人本来就少、或者回避设得太多），就退回全体重挑——
     /// 宁可重复也不能抽不出人。
     /// </remarks>
-    private static FaceBox Choose(List<FaceBox> faces, int width, int height,
-        PickerSettings settings)
+    /// <summary>
+    /// 从检出的人里挑 <paramref name="count"/> 个。
+    /// </summary>
+    /// <remarks>
+    /// 三件事都要顾上：
+    /// <list type="bullet">
+    /// <item>避开最近抽过的（<c>PhotoAvoidRecent</c>）——教室里人不动，位置就是身份；</item>
+    /// <item>同一批里不能挑到同一个人——多个人脸框离得近，几乎一定是同一个人；</item>
+    /// <item>实在挑不出那么多就少给几个，不硬凑。</item>
+    /// </list>
+    /// </remarks>
+    private static List<FaceBox> ChooseMany(List<FaceBox> faces, int width, int height,
+        PickerSettings settings, int count)
     {
+        var picked = new List<FaceBox>();
         var avoid = Math.Max(0, settings.PhotoAvoidRecent);
 
         lock (Recent)
@@ -616,29 +667,50 @@ internal static class CameraPicker
                 Recent.RemoveAt(0);
             }
 
-            var pool = avoid == 0
-                ? faces
-                : faces.Where(f => !Recent.Any(r => Near(r, Center(f, width, height)))).ToList();
+            // 抽不出比检出人数更多的。
+            var want = Math.Min(Math.Max(1, count), faces.Count);
 
-            if (pool.Count == 0)
+            for (var i = 0; i < want; i++)
             {
-                pool = faces;
-                Recent.Clear();
-            }
+                // 这一批已经挑走的那些人的位置。
+                var taken = picked.Select(f => Center(f, width, height)).ToList();
 
-            var picked = pool[RandomNumberGenerator.GetInt32(pool.Count)];
+                var pool = faces
+                    .Where(f => !picked.Contains(f))
+                    .Where(f => !taken.Any(t => Near(t, Center(f, width, height))))
+                    .Where(f => avoid == 0 || !Recent.Any(r => Near(r, Center(f, width, height))))
+                    .ToList();
 
-            if (avoid > 0)
-            {
-                Recent.Add(Center(picked, width, height));
-                while (Recent.Count > avoid)
+                if (pool.Count == 0)
                 {
-                    Recent.RemoveAt(0);
+                    // 回避条件太严（人少 / 最近抽过的太多）：放宽到「本批没挑过」再试。
+                    pool = faces.Where(f => !picked.Contains(f)).ToList();
+                    if (pool.Count == 0)
+                    {
+                        break;
+                    }
+
+                    if (avoid > 0)
+                    {
+                        Recent.Clear();
+                    }
+                }
+
+                var chosen = pool[RandomNumberGenerator.GetInt32(pool.Count)];
+                picked.Add(chosen);
+
+                if (avoid > 0)
+                {
+                    Recent.Add(Center(chosen, width, height));
+                    while (Recent.Count > avoid)
+                    {
+                        Recent.RemoveAt(0);
+                    }
                 }
             }
-
-            return picked;
         }
+
+        return picked;
     }
 
     private static (double X, double Y) Center(FaceBox face, int width, int height) =>

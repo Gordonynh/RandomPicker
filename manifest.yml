@@ -1,10 +1,10 @@
 entranceAssembly: ClassIsland.RandomPicker.dll
 name: 随机抽选
 id: gordon.randompicker
-description: 桌面抽人悬浮窗。点击抽取名单中的一人，屏幕中央弹出大字；支持拍照抽人，从合影中检测人脸随机抽取。名单为纯文本，一行一个名字。
-version: 1.1.0.0
+description: 一个桌面上的随机抽选悬浮球，支持拍照抽人、随机抽人、随机抽组，提供多个名单空间、单次多抽、放回式和不放回式等功能。
+version: 2.0.0.0
 apiVersion: 2.0.0.0
-author: GordonYoung
+author: GordonYoung & ElofHew
 icon: icon.png
 url: https://github.com/Gordonynh/RandomPicker
 readme: README.md

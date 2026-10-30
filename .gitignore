@@ -1,4 +1,13 @@
+# Compiled Releases
 bin/
 obj/
+cipx/
 *.user
+
+# Development Environments
 .vs/
+.vscode/
+.workbuddy
+
+# Other Files
+other/
