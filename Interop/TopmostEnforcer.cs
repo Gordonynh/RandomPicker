@@ -32,7 +32,10 @@ public sealed class TopmostEnforcer : IDisposable
     private const uint SwpNoSize = 0x0001;
     private const uint SwpNoMove = 0x0002;
     private const uint SwpNoActivate = 0x0010;
-    private const uint SwpShowWindow = 0x0040;
+    // 注意：这里不能用 SWP_SHOWWINDOW(0x0040)。
+    // 该标志会「显示窗口」，置顶定时器每隔一秒重申一次，用户刚 Hide() 掉的悬浮窗
+    // 会被下一次 tick 重新显示出来——这就是「点击隐藏后不生效」的根因。
+    // 窗口本来就是 Show() 出来的，重申层级完全不需要带它。
 
     private readonly Window _window;
     private readonly DispatcherTimer _timer;
@@ -42,6 +45,12 @@ public sealed class TopmostEnforcer : IDisposable
 
     /// <summary>上一次让位之后有没有恢复置顶。避免每个 tick 都重复调同一个 SetWindowPos。</summary>
     private bool _yielded;
+
+    /// <summary>
+    /// 暂停置顶重申。窗口被隐藏期间必须置上，否则定时器仍会碰这个窗口，
+    /// 而且一旦带了任何显示类标志就会把它又拉出来。
+    /// </summary>
+    private bool _suspended;
 
     /// <param name="window">要维持置顶的窗口。</param>
     /// <param name="interval">重申置顶的间隔。</param>
@@ -96,6 +105,30 @@ public sealed class TopmostEnforcer : IDisposable
         }
 
         Reassert();
+        if (!_suspended)
+        {
+            _timer.Start();
+        }
+    }
+
+    /// <summary>暂停维持置顶（悬浮窗隐藏时调用，可重复调用）。</summary>
+    public void Suspend()
+    {
+        _suspended = true;
+        _timer.Stop();
+    }
+
+    /// <summary>恢复维持置顶（悬浮窗重新显示时调用）。</summary>
+    public void Resume()
+    {
+        if (!_suspended)
+        {
+            return;
+        }
+
+        _suspended = false;
+        _yielded = false;
+        Reassert();
         _timer.Start();
     }
 
@@ -110,7 +143,7 @@ public sealed class TopmostEnforcer : IDisposable
     /// </remarks>
     public void Reassert()
     {
-        if (!OperatingSystem.IsWindows() || _handle == IntPtr.Zero)
+        if (_suspended || !OperatingSystem.IsWindows() || _handle == IntPtr.Zero)
         {
             return;
         }
@@ -124,8 +157,10 @@ public sealed class TopmostEnforcer : IDisposable
 
         try
         {
+            // 只调整 Z 序：SWP_NOMOVE / SWP_NOSIZE / SWP_NOACTIVATE。
+            // 不带 SWP_SHOWWINDOW，隐藏状态才不会被定时器悄悄改掉。
             SetWindowPos(_handle, yield ? HwndNoTopmost : HwndTopmost, 0, 0, 0, 0,
-                SwpNoMove | SwpNoSize | SwpNoActivate | (yield ? 0 : SwpShowWindow));
+                SwpNoMove | SwpNoSize | SwpNoActivate);
             _yielded = yield;
         }
         catch (Exception)
@@ -136,6 +171,7 @@ public sealed class TopmostEnforcer : IDisposable
 
     public void Dispose()
     {
+        _suspended = true;
         _timer.Stop();
         _handle = IntPtr.Zero;
     }

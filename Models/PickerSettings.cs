@@ -1,8 +1,10 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using ClassIsland.Shared.Enums;
 
 namespace ClassIsland.RandomPicker.Models;
 
@@ -23,7 +25,13 @@ public enum PickMode
     /// <remarks>
     /// 和名单无关——抽的是照片里的人，不是名字。检测不到人脸时会退回按名单抽。
     /// </remarks>
-    Photo
+    Photo,
+
+    /// <summary>
+    /// 把当前名单按每组人数切成若干组，抽中一组后显示组名和组员。
+    /// </summary>
+    /// <remarks>小组有自己独立的轮次记录，和按人抽的「本轮已抽」互不干扰。</remarks>
+    Group
 }
 
 /// <summary>
@@ -64,6 +72,88 @@ public class PickerSettings
 
     /// <summary>上一次抽到的人，用于「随机抽选」模式回避连抽同一个。</summary>
     public string? LastPicked { get; set; }
+
+    #region 多份名单 / 小组抽选
+
+    /// <summary>
+    /// 当前用第几份名单（1~5）。1 对应原来的 <c>名单.txt</c>，老配置升级后行为不变。
+    /// </summary>
+    public int ActiveRosterIndex { get; set; } = 1;
+
+    /// <summary>小组抽选时每组几个人。</summary>
+    public int GroupSize { get; set; } = 4;
+
+    /// <summary>小组抽选本轮已经抽到过的组号。和按人抽的 <see cref="DrawnThisRound"/> 分开记。</summary>
+    public List<int> DrawnGroupsThisRound { get; set; } = new();
+
+    /// <summary>上一次抽到的组号，用于新一轮第一抽回避连抽同一组。</summary>
+    public int? LastGroupIndex { get; set; }
+
+    #endregion
+
+    #region 悬浮窗 / 权重 / 外部调用
+
+    /// <summary>
+    /// 悬浮窗是否被用户藏起来了。
+    /// </summary>
+    /// <remarks>
+    /// 隐藏时除了 <c>Hide()</c>，还必须挂起置顶定时器；恢复走设置页的「显示悬浮窗」开关，
+    /// 不再需要重启 ClassIsland。
+    /// </remarks>
+    public bool HideFloatingWindow { get; set; }
+
+    /// <summary>是否启用名单权重。关掉之后所有名字等概率，名单里写的权重也不生效。</summary>
+    public bool EnableNameWeights { get; set; } = true;
+
+    /// <summary>
+    /// 每个名字的权重覆盖值。设置页里改的就是这份，优先级高于名单文件里写的 <c>*N</c>。
+    /// </summary>
+    public Dictionary<string, double> NameWeights { get; set; } = new(StringComparer.Ordinal);
+
+    /// <summary>URL / 自动化动作没指定人数时，一次抽多少人。</summary>
+    public int DefaultMultiCount { get; set; } = 3;
+
+    /// <summary>是否允许通过 <c>classisland://plugins/randompicker/...</c> 触发抽选。</summary>
+    public bool EnableUriPick { get; set; } = true;
+
+    /// <summary>
+    /// 是否开启本地 HTTP 接口。<b>默认关</b>，且只监听 127.0.0.1。
+    /// </summary>
+    public bool EnableHttpApi { get; set; }
+
+    /// <summary>本地 HTTP 接口端口。</summary>
+    public int HttpApiPort { get; set; } = 17890;
+
+    /// <summary>本地 HTTP 接口的令牌。留空表示不校验；填了之后请求要带 <c>token</c> 参数或 <c>X-Picker-Token</c> 头。</summary>
+    public string HttpApiToken { get; set; } = string.Empty;
+
+    /// <summary>是否启用全局快捷键切换悬浮窗显隐。默认开。</summary>
+    public bool HotkeyEnabled { get; set; } = true;
+
+    /// <summary>快捷键修饰键（Win32 MOD_* 位掩码）。默认 Ctrl+Alt = 3。</summary>
+    public int HotkeyModifiers { get; set; } = 3;
+
+    /// <summary>快捷键虚拟键码（Win32 VK_*）。默认 'R' = 0x52。</summary>
+    public int HotkeyVirtualKey { get; set; } = 0x52;
+
+    /// <summary>
+    /// 课间禁用抽选。开启后课间（<see cref="TimeState.Breaking"/>）里
+    /// 悬浮窗、URL、HTTP、自动化行动等所有入口都不响应。
+    /// </summary>
+    public bool DisableDuringBreak { get; set; } = true;
+
+    /// <summary>
+    /// 打断上一次点名。开启时新抽选立刻关掉上一条还没播完的中央大字并开始新的点名；
+    /// 关闭时上一次点名播完之前，新的抽选请求会被忽略。
+    /// </summary>
+    public bool InterruptPreviousPick { get; set; } = true;
+
+    /// <summary>
+    /// 悬浮窗缩放系数。1 = 原始大小，可调 0.5 ~ 2.0，乘在尺寸档位的直径上。
+    /// </summary>
+    public double FloatingWindowScale { get; set; } = 1.0;
+
+    #endregion
 
     #region 拍照抽人
 
@@ -154,6 +244,63 @@ public class PickerSettings
 
     #endregion
 
+    #region 权重
+
+    /// <summary>
+    /// 取某个名字最终生效的权重。设置页的覆盖值优先，其次是名单文件里写的 <c>*N</c>，
+    /// 都没有就是 1。关掉总开关时一律返回 1。
+    /// </summary>
+    public double GetWeight(string name, double inlineWeight = 1.0)
+    {
+        if (!EnableNameWeights)
+        {
+            return 1.0;
+        }
+
+        if (NameWeights.TryGetValue(name, out var overrideWeight) &&
+            double.IsFinite(overrideWeight) && overrideWeight > 0)
+        {
+            return overrideWeight;
+        }
+
+        return double.IsFinite(inlineWeight) && inlineWeight > 0 ? inlineWeight : 1.0;
+    }
+
+    /// <summary>设置某个名字的权重覆盖值；传 null 或非正数表示删掉覆盖，回落到名单里写的权重。</summary>
+    public void SetWeight(string name, double? weight)
+    {
+        if (string.IsNullOrEmpty(name))
+        {
+            return;
+        }
+
+        if (weight is null || !double.IsFinite(weight.Value) || weight.Value <= 0)
+        {
+            NameWeights.Remove(name);
+            return;
+        }
+
+        NameWeights[name] = Math.Round(Math.Clamp(weight.Value, 0.01, 999), 2);
+    }
+
+    /// <summary>清掉所有权重覆盖。</summary>
+    public void ClearWeights() => NameWeights.Clear();
+
+    /// <summary>删掉名单里已经不存在的名字，免得配置越攒越大。</summary>
+    public int PruneWeights(IEnumerable<string> validNames)
+    {
+        var valid = new HashSet<string>(validNames, StringComparer.Ordinal);
+        var stale = NameWeights.Keys.Where(x => !valid.Contains(x)).ToList();
+        foreach (var name in stale)
+        {
+            NameWeights.Remove(name);
+        }
+
+        return stale.Count;
+    }
+
+    #endregion
+
     #region 读写
 
     private static readonly JsonSerializerOptions JsonOptions = new()
@@ -200,9 +347,15 @@ public class PickerSettings
 
     #endregion
 
-    /// <summary>悬浮窗直径（逻辑像素）。由 <see cref="Size"/> 推导，不进配置文件。</summary>
+    /// <summary>悬浮窗直径（逻辑像素）。尺寸档位推导出基准值，再乘缩放系数，不进配置文件。</summary>
     [JsonIgnore]
-    public double Diameter => Size switch
+    public double Diameter => Math.Clamp(
+        Math.Round(BaseDiameter * (double.IsFinite(FloatingWindowScale) ? FloatingWindowScale : 1.0)),
+        28, 320);
+
+    /// <summary>尺寸档位对应的基准直径，不乘缩放系数。</summary>
+    [JsonIgnore]
+    public double BaseDiameter => Size switch
     {
         PickerSize.Small => 56,
         PickerSize.Large => 104,

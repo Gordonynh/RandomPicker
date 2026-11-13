@@ -2,6 +2,7 @@ using System.Reflection;
 using System.Runtime.Loader;
 using ClassIsland.Core.Abstractions;
 using ClassIsland.Core.Extensions.Registry;
+using ClassIsland.RandomPicker.Automation;
 using ClassIsland.RandomPicker.Services;
 using ClassIsland.RandomPicker.Views;
 using Microsoft.Extensions.DependencyInjection;
@@ -27,12 +28,44 @@ public class RandomPickerPlugin : PluginBase
         // 提醒提供方：抽到人之后把名字推到 ClassIsland 主界面那条上。
         services.AddNotificationProvider<PickerNotificationProvider>();
 
-        // 插件主体。PluginConfigFolder 由宿主在实例化插件时填好，
-        // 设置和名单都放在那儿，跟着插件走。
         var configFolder = PluginConfigFolder;
-        services.AddHostedService(_ => new PickerHostService(configFolder));
+
+        // 事件转接点是所有外部入口（URL / HTTP / 自动化）的公共依赖，先注册成单例。
+        var events = new PickerEventService();
+        services.AddSingleton(events);
+
+        // 宿主服务同时按自身类型注册：设置页、规则、HTTP 都要能拿到同一份实例。
+        var host = new PickerHostService(configFolder, events);
+        services.AddSingleton(host);
+        services.AddSingleton<IHostedService>(host);
+        services.AddHostedService<PickerUriService>();
+        // 全局快捷键：按住能切换悬浮窗显隐，窗口藏起来也照样叫得回来。
+        services.AddHostedService<PickerHotkeyService>();
 
         services.AddSettingsPage<PickerSettingsPage>();
+
+        // 触发器：抽选事件发生时触发工作流。
+        services.AddTrigger<AnyPickedTrigger>();
+        services.AddTrigger<RosterPickedTrigger>();
+        services.AddTrigger<PhotoPickedTrigger>();
+        services.AddTrigger<MultiPickedTrigger>();
+        services.AddTrigger<NamePickedTrigger, PickerTriggerSettingsControl>();
+        // 悬浮窗显隐触发器：隐藏 / 显示时各触发一次。
+        services.AddTrigger<FloatingWindowHiddenTrigger>();
+        services.AddTrigger<FloatingWindowShownTrigger>();
+
+        // 行动：让自动化反过来发起一次抽选。四个共用一个设置控件。
+        services.AddAction<PickOnceAction, PickerActionSettingsControl>();
+        services.AddAction<RosterPickAction, PickerActionSettingsControl>();
+        services.AddAction<PhotoPickAction, PickerActionSettingsControl>();
+        services.AddAction<MultiPickAction, PickerActionSettingsControl>();
+        services.AddAction<GroupPickAction, PickerActionSettingsControl>();
+        // 悬浮窗显隐行动：隐藏 / 显示。
+        services.AddAction<HideFloatingWindowAction>();
+        services.AddAction<ShowFloatingWindowAction>();
+
+        // 规则：注册之后用户就能在「规则集」里搭抽选相关条件。
+        PickerRules.Register(services);
     }
 
     /// <summary>
