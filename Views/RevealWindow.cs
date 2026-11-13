@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using Avalonia;
 using Avalonia.Animation;
 using Avalonia.Animation.Easings;
@@ -26,14 +27,18 @@ namespace ClassIsland.RandomPicker.Views;
 /// <item><b>单例复用</b>。再抽一次不新开窗口，直接换掉里面的名字并重置计时，
 ///       避免连点时叠出一摞窗口。</item>
 /// </list>
+/// <para/>
+/// <b>文字一行一个 TextBlock。</b>早先把带 <c>\n</c> 的整段文字塞进同一个 TextBlock，
+/// 靠 TextAlignment 居中；行宽不等时每一行都会按自己的测量结果偏移，
+/// 抽小组（组名 + 组员）或一次抽多人时歪得很明显。拆成逐行后每行独立居中于卡片中线。
 /// </remarks>
 public class RevealWindow : Window
 {
     private static RevealWindow? _instance;
 
-    private readonly TextBlock _nameText;
-    private readonly Image _portrait;
-    private readonly TextBlock _caption;
+    private readonly StackPanel _nameLines;
+    private readonly WrapPanel _portraits;
+    private readonly StackPanel _captionLines;
     private readonly StackPanel _content;
     private readonly Border _card;
     private readonly DispatcherTimer _closeTimer;
@@ -58,9 +63,22 @@ public class RevealWindow : Window
     /// <param name="portrait">裁好的人像。</param>
     /// <param name="caption">人像下面的一行小字，没有就传 null。</param>
     /// <param name="height">人像显示高度（逻辑像素）。</param>
-    public static void Show(Bitmap portrait, string? caption, double height, TimeSpan hold, Color accent)
+    public static void Show(Bitmap portrait, string? caption, double height, TimeSpan hold, Color accent) =>
+        Show([portrait], caption, height, hold, accent);
+
+    /// <summary>
+    /// 一次显示多张人像。URL / 自动化「一次抽多人」在拍照模式下走这条。
+    /// 人多了会自动缩小并换行，不会把卡片撑出屏幕。
+    /// </summary>
+    public static void Show(IReadOnlyList<Bitmap> portraits, string? caption, double height,
+        TimeSpan hold, Color accent)
     {
-        Ensure(hold, accent, height * 0.2).ShowPortrait(portrait, caption, height, hold, accent);
+        if (portraits.Count == 0)
+        {
+            return;
+        }
+
+        Ensure(hold, accent, height * 0.2).ShowPortraits(portraits, caption, height, hold, accent);
     }
 
     /// <summary>拿到可用的窗口实例：已经开着就复用，否则新建。</summary>
@@ -94,42 +112,35 @@ public class RevealWindow : Window
         WindowStartupLocation = WindowStartupLocation.CenterScreen;
         IsHitTestVisible = false;
 
-        _portrait = new Image
+        _portraits = new WrapPanel
         {
-            Stretch = Stretch.Uniform,
+            Orientation = Orientation.Horizontal,
             HorizontalAlignment = HorizontalAlignment.Center,
             VerticalAlignment = VerticalAlignment.Center,
             IsVisible = false
         };
 
-        _caption = new TextBlock
+        _captionLines = new StackPanel
         {
-            FontSize = 20,
-            Foreground = new SolidColorBrush(Colors.White, 0.62),
             HorizontalAlignment = HorizontalAlignment.Center,
-            TextAlignment = TextAlignment.Center,
-            TextWrapping = TextWrapping.Wrap,
+            VerticalAlignment = VerticalAlignment.Center,
             Margin = new Thickness(0, 12, 0, 0),
             IsVisible = false
         };
 
-        _nameText = new TextBlock
+        _nameLines = new StackPanel
         {
-            Text = name,
-            FontSize = fontSize,
-            FontWeight = FontWeight.SemiBold,
-            Foreground = Brushes.White,
             HorizontalAlignment = HorizontalAlignment.Center,
-            VerticalAlignment = VerticalAlignment.Center,
-            TextAlignment = TextAlignment.Center,
-            TextWrapping = TextWrapping.Wrap
+            VerticalAlignment = VerticalAlignment.Center
         };
+        FillLines(_nameLines, name, fontSize, Math.Max(360, fontSize * 6),
+            FontWeight.SemiBold, 1.0);
 
         _content = new StackPanel
         {
             HorizontalAlignment = HorizontalAlignment.Center,
             VerticalAlignment = VerticalAlignment.Center,
-            Children = { _portrait, _nameText, _caption }
+            Children = { _portraits, _nameLines, _captionLines }
         };
 
         _card = new Border
@@ -172,33 +183,80 @@ public class RevealWindow : Window
         _closeTimer.Tick += (_, _) => FadeOutAndClose();
     }
 
-    /// <summary>复用当前窗口显示一个名字。</summary>
+    /// <summary>
+    /// 把一段可能含换行的文字拆成一行一个 TextBlock。
+    /// 每个 TextBlock 自己水平居中，整叠 StackPanel 也居中，行宽不同就不会逐行歪掉。
+    /// </summary>
+    private static void FillLines(StackPanel panel, string? text, double fontSize,
+        double maxWidth, FontWeight weight, double opacity)
+    {
+        panel.Children.Clear();
+        if (string.IsNullOrEmpty(text))
+        {
+            return;
+        }
+
+        foreach (var line in text.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n'))
+        {
+            panel.Children.Add(new TextBlock
+            {
+                Text = line,
+                FontSize = fontSize,
+                FontWeight = weight,
+                Foreground = new SolidColorBrush(Colors.White, opacity),
+                HorizontalAlignment = HorizontalAlignment.Center,
+                TextAlignment = TextAlignment.Center,
+                TextWrapping = TextWrapping.Wrap,
+                MaxWidth = maxWidth
+            });
+        }
+    }
+
+    /// <summary>复用当前窗口显示一段文字（可含换行）。</summary>
     private void ShowText(string text, string? caption, double fontSize, TimeSpan hold, Color accent)
     {
-        _portrait.IsVisible = false;
-        _portrait.Source = null;
-        _caption.IsVisible = !string.IsNullOrEmpty(caption);
-        _caption.Text = caption ?? string.Empty;
-        _caption.MaxWidth = Math.Max(240, fontSize * 5);
-        _nameText.IsVisible = true;
-        _nameText.Text = text;
-        _nameText.FontSize = fontSize;
+        _portraits.IsVisible = false;
+        _portraits.Children.Clear();
+
+        FillLines(_nameLines, text, fontSize, Math.Max(360, fontSize * 6),
+            FontWeight.SemiBold, 1.0);
+        _nameLines.IsVisible = true;
+
+        FillLines(_captionLines, caption, 20, Math.Max(240, fontSize * 5),
+            FontWeight.Normal, 0.62);
+        _captionLines.IsVisible = !string.IsNullOrEmpty(caption);
 
         _card.CornerRadius = new CornerRadius(fontSize * 0.18);
         _card.Padding = new Thickness(fontSize * 0.62, fontSize * 0.34);
         Bump(hold, accent);
     }
 
-    /// <summary>复用当前窗口显示一张人像。</summary>
-    private void ShowPortrait(Bitmap portrait, string? caption, double height, TimeSpan hold, Color accent)
+    /// <summary>复用当前窗口显示一张或多张人像。</summary>
+    private void ShowPortraits(IReadOnlyList<Bitmap> portraits, string? caption,
+        double height, TimeSpan hold, Color accent)
     {
-        _nameText.IsVisible = false;
-        _portrait.IsVisible = true;
-        _portrait.Source = portrait;
-        _portrait.Height = height;
+        _nameLines.IsVisible = false;
+        _portraits.IsVisible = true;
+        _portraits.Children.Clear();
 
-        _caption.IsVisible = !string.IsNullOrEmpty(caption);
-        _caption.Text = caption ?? string.Empty;
+        // 人越多每张越小，最多缩到四成；WrapPanel 会自动换行。
+        var scale = portraits.Count <= 1
+            ? 1.0
+            : Math.Clamp(1.0 / Math.Sqrt(portraits.Count), 0.4, 0.85);
+        foreach (var portrait in portraits)
+        {
+            _portraits.Children.Add(new Image
+            {
+                Source = portrait,
+                Stretch = Stretch.Uniform,
+                Height = height * scale,
+                Margin = new Thickness(6)
+            });
+        }
+
+        FillLines(_captionLines, caption, 20, Math.Max(240, height * 0.9),
+            FontWeight.Normal, 0.62);
+        _captionLines.IsVisible = !string.IsNullOrEmpty(caption);
 
         _card.CornerRadius = new CornerRadius(18);
         _card.Padding = new Thickness(18);

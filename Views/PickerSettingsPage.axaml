@@ -7,19 +7,99 @@
         <StackPanel Classes="settings-container animated-intro">
 
             <TextBlock Classes="l-instructive" TextWrapping="Wrap"
-                       Text="日常操作在悬浮窗右键菜单。此页配置拍照抽人：拍摄合影，从中随机抽取一人。"/>
+                       Text="日常操作在悬浮窗右键菜单。此页配置多份名单、小组抽选、名单权重、URL 抽人、自动化与拍照抽人。"/>
+
+            <Separator Margin="0 12 0 4"/>
+            <ci:IconText Glyph="&#xE80F;" Text="常规" Margin="0 0 0 4"/>
+
+            <controls:SettingsExpander IconSource="{ci:FluentIconSource &#xE80F;}"
+                                       Header="显示悬浮窗"
+                                       Description="{Binding FloatingWindowSummary}">
+                <controls:SettingsExpander.Footer>
+                    <ToggleSwitch IsChecked="{Binding FloatingWindowVisible, Mode=TwoWay}"/>
+                </controls:SettingsExpander.Footer>
+            </controls:SettingsExpander>
+
+            <controls:SettingsExpander IconSource="{ci:FluentIconSource &#xE7A8;}"
+                                       Header="悬浮窗缩放系数"
+                                       Description="调整悬浮窗大小，以适配不同的屏幕。">
+                <controls:SettingsExpander.Footer>
+                    <StackPanel Orientation="Horizontal" Spacing="10" VerticalAlignment="Center">
+                        <Slider Width="160" Minimum="0.5" Maximum="2.0" TickFrequency="0.05"
+                                IsSnapToTickEnabled="True" VerticalAlignment="Center"
+                                Value="{Binding FloatingScale, Mode=TwoWay}"/>
+                        <TextBlock VerticalAlignment="Center" MinWidth="54"
+                                   Text="{Binding FloatingScaleText}"/>
+                    </StackPanel>
+                </controls:SettingsExpander.Footer>
+            </controls:SettingsExpander>
+
+            <controls:SettingsExpander IconSource="{ci:FluentIconSource &#xE7EE;}"
+                                       Header="下课禁用"
+                                       Description="在课间禁用所有点名功能。">
+                <controls:SettingsExpander.Footer>
+                    <ToggleSwitch IsChecked="{Binding DisableDuringBreak, Mode=TwoWay}"/>
+                </controls:SettingsExpander.Footer>
+            </controls:SettingsExpander>
+
+            <controls:SettingsExpander IconSource="{ci:FluentIconSource &#xE918;}"
+                                       Header="打断点名"
+                                       Description="打断上一次点名，并触发新的点名。">
+                <controls:SettingsExpander.Footer>
+                    <ToggleSwitch IsChecked="{Binding InterruptPreviousPick, Mode=TwoWay}"/>
+                </controls:SettingsExpander.Footer>
+            </controls:SettingsExpander>
+
+            <controls:SettingsExpander IconSource="{ci:FluentIconSource &#xE7EB;}"
+                                       Header="快捷键切换悬浮窗"
+                                       Description="{Binding HotkeySummary}">
+                <controls:SettingsExpander.Footer>
+                    <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                        <ComboBox MinWidth="130" ItemsSource="{Binding HotkeyModifierChoices}"
+                                  SelectedIndex="{Binding HotkeyModifiersIndex, Mode=TwoWay}"/>
+                        <ComboBox MinWidth="90" ItemsSource="{Binding HotkeyKeyChoices}"
+                                  SelectedIndex="{Binding HotkeyKeyIndex, Mode=TwoWay}"/>
+                        <ToggleSwitch IsChecked="{Binding HotkeyEnabled, Mode=TwoWay}"/>
+                    </StackPanel>
+                </controls:SettingsExpander.Footer>
+            </controls:SettingsExpander>
 
             <Separator Margin="0 12 0 4"/>
             <ci:IconText Glyph="&#xE8A5;" Text="名单" Margin="0 0 0 4"/>
 
             <controls:SettingsExpander IconSource="{ci:FluentIconSource &#xE8A5;}"
-                                       Header="名单文件"
+                                       Header="当前名单"
                                        Description="{Binding RosterSummary}">
                 <controls:SettingsExpander.Footer>
-                    <Button Click="OnOpenRoster">
-                        <ci:IconText Glyph="&#xE8E5;" Text="打开"/>
-                    </Button>
+                    <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                        <ComboBox MinWidth="180" ItemsSource="{Binding RosterChoices}"
+                                  SelectedIndex="{Binding RosterIndex, Mode=TwoWay}"/>
+                        <Button Click="OnOpenRoster">
+                            <ci:IconText Glyph="&#xE8E5;" Text="打开"/>
+                        </Button>
+                    </StackPanel>
                 </controls:SettingsExpander.Footer>
+                <TextBlock Classes="l-instructive" TextWrapping="Wrap" Margin="0 8 0 4"
+                           Text="共五份名单，共用一套权重设置。切换后圆钮计数、抽组结果和权重行都会跟着换。1 号就是原来的「名单.txt」，2~5 号第一次切换时会自动建好示例文件。"/>
+            </controls:SettingsExpander>
+
+            <Separator Margin="0 12 0 4"/>
+            <ci:IconText Glyph="&#xE902;" Text="小组抽选" Margin="0 0 0 4"/>
+
+            <controls:SettingsExpander IconSource="{ci:FluentIconSource &#xE902;}"
+                                       Header="每组人数"
+                                       Description="{Binding GroupSummary}">
+                <controls:SettingsExpander.Footer>
+                    <StackPanel Orientation="Horizontal" Spacing="10" VerticalAlignment="Center">
+                        <Slider Width="160" Minimum="1" Maximum="20" TickFrequency="1"
+                                IsSnapToTickEnabled="True" VerticalAlignment="Center"
+                                Value="{Binding GroupSize, Mode=TwoWay}"/>
+                        <TextBlock VerticalAlignment="Center" MinWidth="54"
+                                   Text="{Binding GroupSize}"/>
+                    </StackPanel>
+                </controls:SettingsExpander.Footer>
+                <TextBlock Classes="l-instructive" TextWrapping="Wrap" Margin="0 8 0 4"
+                           Text="按名单顺序切组，最后一组人数不足也照样成组。小组有独立轮次，抽完自动开新一轮。在悬浮窗右键菜单里选「小组抽选」即可使用，大字会分行显示组名和组员。"/>
             </controls:SettingsExpander>
 
             <Separator Margin="0 12 0 4"/>
@@ -172,6 +252,131 @@
                 <controls:SettingsExpander.Footer>
                     <ToggleSwitch IsChecked="{Binding SavePhotos, Mode=TwoWay}"/>
                 </controls:SettingsExpander.Footer>
+            </controls:SettingsExpander>
+
+            <Separator Margin="0 16 0 4"/>
+            <ci:IconText Glyph="&#xE8D5;" Text="名单权重" Margin="0 0 0 4"/>
+
+            <TextBlock Classes="l-instructive" TextWrapping="Wrap"
+                       Text="权重越大越容易被抽中。名单文件里写「张三 *3」也能加权；这里填的值优先。留空即恢复名单里写的权重，关掉总开关则所有人等概率。"/>
+
+            <controls:SettingsExpander IconSource="{ci:FluentIconSource &#xE8D5;}"
+                                       Header="启用权重"
+                                       Description="关掉后所有名字等概率，名单里的 *N 也暂时不生效。">
+                <controls:SettingsExpander.Footer>
+                    <ToggleSwitch IsChecked="{Binding EnableNameWeights, Mode=TwoWay}"/>
+                </controls:SettingsExpander.Footer>
+            </controls:SettingsExpander>
+
+            <controls:SettingsExpander IconSource="{ci:FluentIconSource &#xE8A5;}"
+                                       Header="逐个设置权重"
+                                       Description="{Binding WeightSummary}"
+                                       IsExpanded="True">
+                <controls:SettingsExpander.Footer>
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Button Click="OnRefreshWeights">
+                            <ci:IconText Glyph="&#xE117;" Text="刷新名单"/>
+                        </Button>
+                        <Button Click="OnResetWeights">
+                            <ci:IconText Glyph="&#xE711;" Text="全部重置"/>
+                        </Button>
+                    </StackPanel>
+                </controls:SettingsExpander.Footer>
+                <ItemsControl ItemsSource="{Binding WeightRows}" Margin="0 8 0 4" MinWidth="480">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <Grid ColumnDefinitions="30,*,170,64,Auto" Margin="0 3"
+                                  VerticalAlignment="Center">
+                                <TextBlock Grid.Column="0" Text="{Binding Index}"
+                                           VerticalAlignment="Center" Opacity="0.6"/>
+                                <TextBlock Grid.Column="1" Text="{Binding Name}"
+                                           VerticalAlignment="Center" Margin="6 0 8 0"
+                                           TextTrimming="CharacterEllipsis"
+                                           ToolTip.Tip="{Binding Name}"/>
+                                <Slider Grid.Column="2" Minimum="0.1" Maximum="10.0"
+                                        TickFrequency="0.1" IsSnapToTickEnabled="True"
+                                        VerticalAlignment="Center"
+                                        Value="{Binding WeightValue, Mode=TwoWay}"/>
+                                <TextBlock Grid.Column="3" Text="{Binding WeightText}"
+                                           VerticalAlignment="Center" Margin="6 0 0 0"
+                                           FontSize="12" Opacity="0.85"/>
+                                <Button Grid.Column="4" Margin="6 0 0 0" Padding="4"
+                                        VerticalAlignment="Center" Click="OnResetRowWeight"
+                                        Tag="{Binding}"
+                                        ToolTip.Tip="恢复名单里写的权重">
+                                    <ci:IconText Glyph="&#xE9A2;" Text=""/>
+                                </Button>
+                            </Grid>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </controls:SettingsExpander>
+
+            <Separator Margin="0 16 0 4"/>
+            <ci:IconText Glyph="&#xE774;" Text="通过 URL 抽人" Margin="0 0 0 4"/>
+
+            <TextBlock Classes="l-instructive" TextWrapping="Wrap"
+                       Text="两种 URL：classisland:// 走 ClassIsland 自带的协议，适合快捷方式和自动化；本地 HTTP 接口适合浏览器或脚本，默认关闭且只监听本机。两种方式都支持名单抽人、抽小组、拍照抽人和一次抽多人。"/>
+
+            <controls:SettingsExpander IconSource="{ci:FluentIconSource &#xE774;}"
+                                       Header="允许 classisland:// 链接抽人"
+                                       Description="{Binding UriSummary}">
+                <controls:SettingsExpander.Footer>
+                    <ToggleSwitch IsChecked="{Binding EnableUriPick, Mode=TwoWay}"/>
+                </controls:SettingsExpander.Footer>
+            </controls:SettingsExpander>
+
+            <controls:SettingsExpander IconSource="{ci:FluentIconSource &#xE8A5;}"
+                                       Header="示例链接"
+                                       Description="复制到浏览器地址栏、快捷方式或运行窗口即可调用。"
+                                       IsExpanded="True">
+                <TextBlock Text="{Binding UriExamples}" TextWrapping="Wrap" Margin="0 8 0 4"
+                           FontSize="12" Opacity="0.85"/>
+            </controls:SettingsExpander>
+
+            <controls:SettingsExpander IconSource="{ci:FluentIconSource &#xE968;}"
+                                       Header="本地 HTTP 接口"
+                                       Description="{Binding HttpStatus}">
+                <controls:SettingsExpander.Footer>
+                    <ToggleSwitch IsChecked="{Binding EnableHttpApi, Mode=TwoWay}"/>
+                </controls:SettingsExpander.Footer>
+            </controls:SettingsExpander>
+
+            <controls:SettingsExpander IconSource="{ci:FluentIconSource &#xE8AC;}"
+                                       Header="端口与令牌"
+                                       Description="端口范围 1024~65535。令牌留空表示不校验；改完点「应用」。">
+                <controls:SettingsExpander.Footer>
+                    <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                        <TextBox Width="90" Text="{Binding HttpApiPortText, Mode=TwoWay}"
+                                 VerticalAlignment="Center"/>
+                        <TextBox Width="170" Watermark="令牌（可留空）"
+                                 Text="{Binding HttpApiTokenText, Mode=TwoWay}"
+                                 VerticalAlignment="Center"/>
+                        <Button Click="OnRestartHttp">
+                            <ci:IconText Glyph="&#xE117;" Text="应用"/>
+                        </Button>
+                    </StackPanel>
+                </controls:SettingsExpander.Footer>
+                <TextBlock Text="{Binding HttpExamples}" TextWrapping="Wrap" Margin="0 8 0 4"
+                           FontSize="12" Opacity="0.85"/>
+            </controls:SettingsExpander>
+
+            <Separator Margin="0 16 0 4"/>
+            <ci:IconText Glyph="&#xE9E9;" Text="自动化与规则集" Margin="0 0 0 4"/>
+
+            <TextBlock Classes="l-instructive" TextWrapping="Wrap"
+                       Text="{Binding AutomationSummary}"/>
+
+            <controls:SettingsExpander IconSource="{ci:FluentIconSource &#xE9E9;}"
+                                       Header="添加示例规则集"
+                                       Description="往当前自动化配置里加一条「触发器 + 规则集 + 行动」的示例工作流，默认不启用，改好再打开。">
+                <controls:SettingsExpander.Footer>
+                    <Button Click="OnAddSampleWorkflow">
+                        <ci:IconText Glyph="&#xE710;" Text="添加示例"/>
+                    </Button>
+                </controls:SettingsExpander.Footer>
+                <TextBlock Text="{Binding SampleSummary}" TextWrapping="Wrap" Margin="0 8 0 4"
+                           FontSize="12" Opacity="0.85"/>
             </controls:SettingsExpander>
 
         </StackPanel>

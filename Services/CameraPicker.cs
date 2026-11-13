@@ -47,8 +47,11 @@ public sealed class ShotResult
     /// <summary>摄像头是不是本来就热着（省掉了打开的那一两秒）。</summary>
     public bool WasWarm { get; init; }
 
-    /// <summary>抽中那个人的人像。</summary>
+    /// <summary>抽中那个人的人像。一次抽多人时这里是第一张，完整列表看 <see cref="Portraits"/>。</summary>
     public Bitmap? Portrait { get; init; }
+
+    /// <summary>抽中的人像列表。一次抽多人时按抽出顺序排列。</summary>
+    public List<Bitmap> Portraits { get; init; } = [];
 
     /// <summary>整帧缩略图，检测框已经画上去了。设置页里用来核对。</summary>
     public Bitmap? Annotated { get; init; }
@@ -113,9 +116,10 @@ internal static class CameraPicker
     /// <param name="settings">插件设置。</param>
     /// <param name="pluginDirectory">插件目录，模型和 ONNX Runtime 都在这儿。</param>
     /// <param name="configFolder">要存原图时存到哪。</param>
+    /// <param name="count">一次抽几个人像。超出检出人脸数时按人脸数封顶。</param>
     /// <param name="annotate">是否额外产出一张画了检测框的缩略图（设置页试拍时才要）。</param>
     public static async Task<ShotResult> CaptureAndPickAsync(PickerSettings settings,
-        string pluginDirectory, string configFolder, bool annotate = false)
+        string pluginDirectory, string configFolder, int count = 1, bool annotate = false)
     {
         await Gate.WaitAsync();
         try
@@ -187,13 +191,44 @@ internal static class CameraPicker
                 };
             }
 
-            var chosen = Choose(faces, width, height, settings);
-            var portrait = await CropAsync(pixels, width, height, Expand(chosen, width, height, settings));
+            // 一次抽多人：从同一帧里挑互不重复的几张脸，各自裁一张人像。
+            // Choose 每次都会记进 Recent，所以同一次连抽也不会撞到同一个人。
+            var take = Math.Clamp(count <= 0 ? 1 : count, 1, faces.Count);
+            var chosenFaces = ChooseMany(faces, width, height, settings, take);
+            var portraits = new List<Bitmap>(take);
+            foreach (var face in chosenFaces)
+            {
+                var portrait = await CropAsync(pixels, width, height,
+                    Expand(face, width, height, settings));
+                if (portrait is not null)
+                {
+                    portraits.Add(portrait);
+                }
+            }
+
+            if (portraits.Count == 0)
+            {
+                return new ShotResult
+                {
+                    Success = false,
+                    Message = "人像裁切失败",
+                    FrameWidth = width,
+                    FrameHeight = height,
+                    FaceCount = faces.Count,
+                    OpenMs = openMs,
+                    CaptureMs = captureMs,
+                    DetectMs = detectMs,
+                    WasWarm = wasWarm,
+                    Annotated = annotated
+                };
+            }
 
             return new ShotResult
             {
                 Success = true,
-                Message = $"从 {faces.Count} 人中抽取一人",
+                Message = portraits.Count > 1
+                    ? $"从 {faces.Count} 人中抽取 {portraits.Count} 人"
+                    : $"从 {faces.Count} 人中抽取一人",
                 FrameWidth = width,
                 FrameHeight = height,
                 FaceCount = faces.Count,
@@ -201,7 +236,8 @@ internal static class CameraPicker
                 CaptureMs = captureMs,
                 DetectMs = detectMs,
                 WasWarm = wasWarm,
-                Portrait = portrait,
+                Portrait = portraits[0],
+                Portraits = portraits,
                 Annotated = annotated
             };
         }
@@ -639,6 +675,25 @@ internal static class CameraPicker
 
             return picked;
         }
+    }
+
+    /// <summary>
+    /// 一次挑出互不重复的几张脸。逐个把抽中的从池子里移除，避免同一帧里出现两张一样的脸。
+    /// </summary>
+    private static List<FaceBox> ChooseMany(List<FaceBox> faces, int width, int height,
+        PickerSettings settings, int count)
+    {
+        var pool = faces.ToList();
+        var result = new List<FaceBox>(count);
+        for (var i = 0; i < count && pool.Count > 0; i++)
+        {
+            var picked = Choose(pool, width, height, settings);
+            result.Add(picked);
+            // FaceBox 是 record，值相等就认作同一张脸；这里只移除一个，不影响后面重抽。
+            pool.Remove(picked);
+        }
+
+        return result;
     }
 
     private static (double X, double Y) Center(FaceBox face, int width, int height) =>

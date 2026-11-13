@@ -38,6 +38,7 @@ public class PickerWindow : Window
 
     private readonly PickerSettings _settings;
     private readonly RosterService _roster;
+    private readonly PickerHostService? _host;
     private readonly Border _knob;
     private readonly TextBlock _label;
     private readonly TextBlock _counter;
@@ -53,13 +54,16 @@ public class PickerWindow : Window
     private bool _pointerDown;
     private bool _dragging;
     private bool _menuOpened;
+    private bool _hidden;
+    private int _menuSerial;
     private Point _pressOrigin;
     private PixelPoint _grabOffset;
 
-    public PickerWindow(PickerSettings settings, RosterService roster)
+    public PickerWindow(PickerSettings settings, RosterService roster, PickerHostService? host = null)
     {
         _settings = settings;
         _roster = roster;
+        _host = host;
 
         SystemDecorations = SystemDecorations.None;
         Background = null;
@@ -76,7 +80,9 @@ public class PickerWindow : Window
             Foreground = Brushes.White,
             FontWeight = FontWeight.SemiBold,
             HorizontalAlignment = HorizontalAlignment.Center,
-            TextAlignment = TextAlignment.Center
+            TextAlignment = TextAlignment.Center,
+            TextWrapping = TextWrapping.Wrap,
+            MaxWidth = double.PositiveInfinity
         };
 
         _counter = new TextBlock
@@ -149,6 +155,48 @@ public class PickerWindow : Window
     /// <summary>用户要求隐藏悬浮窗。</summary>
     public event EventHandler? HideRequested;
 
+    /// <summary>当前是不是被藏起来了。</summary>
+    public bool IsHidden => _hidden;
+
+    #region 显示 / 隐藏
+
+    /// <summary>
+    /// 显示或隐藏悬浮窗。
+    /// </summary>
+    /// <remarks>
+    /// <b>隐藏时必须先把 <see cref="TopmostEnforcer"/> 挂起</b>：那个定时器每秒重申一次置顶，
+    /// 隐藏期间继续跑不但白费，历史上还因为带了 <c>SWP_SHOWWINDOW</c> 把窗口又拉了出来，
+    /// 表现就是「点隐藏没反应」。现在两处都改了：定时器不再带显示标志，隐藏时也会停掉。
+    /// <para/>
+    /// 重新显示走 <see cref="Window.Show"/>（Avalonia 允许 Hide 之后再次 Show），
+    /// 并恢复置顶重申。状态由宿主写进 settings.json，重启后仍然记得。
+    /// </remarks>
+    public void SetHidden(bool hidden)
+    {
+        if (_hidden == hidden)
+        {
+            return;
+        }
+
+        _hidden = hidden;
+        if (hidden)
+        {
+            _menu?.Hide();
+            _holdTimer.Stop();
+            _flashTimer?.Stop();
+            _topmost?.Suspend();
+            Hide();
+            return;
+        }
+
+        Show();
+        _topmost?.Resume();
+        ApplyAccent();
+        RefreshCounter();
+    }
+
+    #endregion
+
     #region 外观
 
     /// <summary>当前主题色，取自应用已生成的 <c>SystemAccentColor</c>。</summary>
@@ -185,7 +233,7 @@ public class PickerWindow : Window
         ClampToScreen();
     }
 
-    /// <summary>刷新圆钮上的剩余人数。</summary>
+    /// <summary>刷新圆钮上的剩余人数 / 组数。</summary>
     public void RefreshCounter()
     {
         if (_busy)
@@ -206,6 +254,14 @@ public class PickerWindow : Window
         if (total == 0)
         {
             _counter.Text = "空";
+            return;
+        }
+
+        if (_settings.Mode == PickMode.Group)
+        {
+            var groups = GroupService.GroupCount(total, _settings.GroupSize);
+            var left = Math.Max(0, groups - (_settings.DrawnGroupsThisRound?.Count ?? 0));
+            _counter.Text = $"{left}/{groups} 组";
             return;
         }
 
@@ -236,6 +292,33 @@ public class PickerWindow : Window
     }
 
     private bool _busy;
+
+    /// <summary>临时提示的回滚定时器（如「课间禁用」）。</summary>
+    private DispatcherTimer? _flashTimer;
+
+    /// <summary>
+    /// 在圆钮上闪一条两秒的临时提示，然后恢复正常的计数显示。
+    /// </summary>
+    /// <remarks>课间禁用时点一下圆钮什么都不发生会很莫名其妙，得告诉用户为什么没反应。</remarks>
+    public void FlashMessage(string text)
+    {
+        _flashTimer ??= new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(2000) };
+        _flashTimer.Stop();
+        _flashTimer.Tick -= OnFlashElapsed;
+        _flashTimer.Tick += OnFlashElapsed;
+
+        _label.Text = text;
+        _label.FontSize = _settings.Diameter * 0.17;
+        _counter.Text = string.Empty;
+        _flashTimer.Start();
+    }
+
+    private void OnFlashElapsed(object? sender, EventArgs e)
+    {
+        _flashTimer?.Stop();
+        _label.FontSize = _settings.Diameter * 0.30;
+        RefreshCounter();
+    }
 
     #endregion
 
@@ -457,19 +540,66 @@ public class PickerWindow : Window
         _menu.ShowAt(_knob, showAtPointer: true);
     }
 
-    /// <summary>单选组的组名。三组必须各不相同，否则会被归成一组互相抢。</summary>
-    private const string ModeGroup = "picker.mode";
+    /// <summary>
+    /// 一屏菜单里的一个单选组。
+    /// </summary>
+    /// <remarks>
+    /// <b>不能只靠 Avalonia 的 Radio + GroupName 自动互斥。</b>
+    /// RadioButtonGroupManager 的分组表是在菜单项挂到可视树时建立的，
+    /// 而这里每次右键都新建一批 MenuItem；建表时表还是空的，旧项又可能还没注销，
+    /// 于是「两个圆点同时亮」。这里做两件事：
+    /// <list type="number">
+    /// <item>每次弹菜单给每组换一个唯一的 GroupName，旧项和新项不会被归进同一组；</item>
+    /// <item>点击时自己把同组其它项显式置为未选中，不依赖分组表。</item>
+    /// </list>
+    /// 切换名单那组也一样，菜单重开时勾选状态按当前设置重新取。
+    /// </remarks>
+    private sealed class RadioGroup
+    {
+        private readonly List<MenuItem> _items = [];
+        private readonly string _name;
 
-    private const string SizeGroup = "picker.size";
-    private const string HoldGroup = "picker.hold";
+        public RadioGroup(string name) => _name = name;
+
+        public MenuItem Add(string header, bool isChecked, Action action)
+        {
+            var item = new MenuItem
+            {
+                Header = header,
+                ToggleType = MenuItemToggleType.Radio,
+                GroupName = _name,
+                IsChecked = isChecked
+            };
+            item.Click += (_, _) =>
+            {
+                foreach (var other in _items)
+                {
+                    other.IsChecked = ReferenceEquals(other, item);
+                }
+
+                action();
+            };
+            _items.Add(item);
+            return item;
+        }
+    }
 
     /// <summary>
     /// 菜单内容。每次打开都重新构建，勾选状态和剩余人数才是当前的。
     /// </summary>
     private object[] BuildMenuItems()
     {
+        // 组名带一个自增后缀：新旧菜单项不会落进 Avalonia 全局分组表的同一个桶。
+        var suffix = "." + (++_menuSerial);
+        var mode = new RadioGroup("picker.mode" + suffix);
+        var size = new RadioGroup("picker.size" + suffix);
+        var hold = new RadioGroup("picker.hold" + suffix);
+        var roster = new RadioGroup("picker.roster" + suffix);
+
         var total = _roster.Names.Count;
         var remaining = _roster.RemainingInRound(_settings);
+        var groupTotal = GroupService.GroupCount(total, _settings.GroupSize);
+        var groupRemaining = Math.Max(0, groupTotal - (_settings.DrawnGroupsThisRound?.Count ?? 0));
 
         return
         [
@@ -477,32 +607,49 @@ public class PickerWindow : Window
                 ? "拍照抽人"
                 : total == 0
                     ? "名单是空的"
-                    : _settings.Mode == PickMode.NoRepeat
-                        ? $"本轮还剩 {remaining} / {total} 人"
-                        : $"共 {total} 人"),
+                    : _settings.Mode == PickMode.Group
+                        ? $"本轮还剩 {groupRemaining} / {groupTotal} 组"
+                        : _settings.Mode == PickMode.NoRepeat
+                            ? $"本轮还剩 {remaining} / {total} 人"
+                            : $"共 {total} 人"),
             Item("抽一个", () => PickRequested?.Invoke(this, EventArgs.Empty)),
             new Separator(),
 
-            Choice("随机抽选", ModeGroup, _settings.Mode == PickMode.Random,
+            mode.Add("随机抽选", _settings.Mode == PickMode.Random,
                 () => SetMode(PickMode.Random)),
-            Choice("本轮内不重复", ModeGroup, _settings.Mode == PickMode.NoRepeat,
+            mode.Add("本轮内不重复", _settings.Mode == PickMode.NoRepeat,
                 () => SetMode(PickMode.NoRepeat)),
-            Choice("拍照抽人", ModeGroup, _settings.Mode == PickMode.Photo,
+            mode.Add("小组抽选", _settings.Mode == PickMode.Group,
+                () => SetMode(PickMode.Group)),
+            mode.Add("拍照抽人", _settings.Mode == PickMode.Photo,
                 () => SetMode(PickMode.Photo)),
             Item("开始新一轮", () =>
             {
-                RosterService.ResetRound(_settings);
+                if (_settings.Mode == PickMode.Group)
+                {
+                    GroupService.ResetRound(_settings);
+                }
+                else
+                {
+                    RosterService.ResetRound(_settings);
+                }
+
                 RefreshCounter();
                 SettingsChanged?.Invoke(this, EventArgs.Empty);
             }),
             new Separator(),
 
-            Item("打开名单文件", OpenRosterFile),
+            Item("打开当前名单", OpenRosterFile),
             Item("重新载入名单", () =>
             {
                 _roster.Reload();
                 RefreshCounter();
             }),
+            new MenuItem
+            {
+                Header = "切换名单",
+                ItemsSource = BuildRosterItems(roster)
+            },
             new Separator(),
 
             new MenuItem
@@ -510,11 +657,11 @@ public class PickerWindow : Window
                 Header = "悬浮窗大小",
                 ItemsSource = new object[]
                 {
-                    Choice("小", SizeGroup, _settings.Size == PickerSize.Small,
+                    size.Add("小", _settings.Size == PickerSize.Small,
                         () => SetSize(PickerSize.Small)),
-                    Choice("中", SizeGroup, _settings.Size == PickerSize.Medium,
+                    size.Add("中", _settings.Size == PickerSize.Medium,
                         () => SetSize(PickerSize.Medium)),
-                    Choice("大", SizeGroup, _settings.Size == PickerSize.Large,
+                    size.Add("大", _settings.Size == PickerSize.Large,
                         () => SetSize(PickerSize.Large))
                 }
             },
@@ -534,11 +681,11 @@ public class PickerWindow : Window
                         SettingsChanged?.Invoke(this, EventArgs.Empty);
                     }),
                     new Separator(),
-                    Choice("停留 1.5 秒", HoldGroup, Math.Abs(_settings.RevealSeconds - 1.5) < 0.01,
+                    hold.Add("停留 1.5 秒", Math.Abs(_settings.RevealSeconds - 1.5) < 0.01,
                         () => SetHold(1.5)),
-                    Choice("停留 2.5 秒", HoldGroup, Math.Abs(_settings.RevealSeconds - 2.5) < 0.01,
+                    hold.Add("停留 2.5 秒", Math.Abs(_settings.RevealSeconds - 2.5) < 0.01,
                         () => SetHold(2.5)),
-                    Choice("停留 4 秒", HoldGroup, Math.Abs(_settings.RevealSeconds - 4.0) < 0.01,
+                    hold.Add("停留 4 秒", Math.Abs(_settings.RevealSeconds - 4.0) < 0.01,
                         () => SetHold(4.0))
                 }
             },
@@ -546,6 +693,30 @@ public class PickerWindow : Window
 
             Item("隐藏悬浮窗", () => HideRequested?.Invoke(this, EventArgs.Empty))
         ];
+    }
+
+    /// <summary>「切换名单」子菜单，每项显示该份名单的人数。</summary>
+    private object[] BuildRosterItems(RadioGroup group)
+    {
+        if (_host is null)
+        {
+            return [Header("插件未就绪")];
+        }
+
+        var items = new object[PickerHostService.RosterSlots];
+        for (var i = 1; i <= PickerHostService.RosterSlots; i++)
+        {
+            var index = i;
+            items[i - 1] = group.Add(_host.RosterLabel(index),
+                _settings.ActiveRosterIndex == index,
+                () =>
+                {
+                    _host.SwitchRoster(index);
+                    RefreshCounter();
+                });
+        }
+
+        return items;
     }
 
     private static MenuItem Item(string header, Action action)
@@ -571,33 +742,6 @@ public class PickerWindow : Window
             IsChecked = isChecked
         };
         item.Click += (_, _) => apply(item.IsChecked);
-        return item;
-    }
-
-    /// <summary>
-    /// 一组里只能选一个的选项。
-    /// </summary>
-    /// <remarks>
-    /// <b>互斥项必须用 Radio 并且给 GroupName，不能用 CheckBox。</b>
-    /// 用 CheckBox 时 Avalonia 只会机械地翻转被点的那一项：
-    /// 点已选中的项会把它取消掉（整组一个勾都没有），点另一项则两个都带勾——
-    /// 「菜单勾选有问题」就是这么来的。换成 Radio 之后，
-    /// Avalonia 的 RadioButtonGroupManager 会自动取消同组的其它项，
-    /// 点已选中的项也会保持选中。
-    /// <para/>
-    /// GroupName <b>必须每组不同</b>：它是分组的唯一依据，不给名字的话
-    /// 三组九项会被归进同一组，互相抢。
-    /// </remarks>
-    private static MenuItem Choice(string header, string groupName, bool isChecked, Action action)
-    {
-        var item = new MenuItem
-        {
-            Header = header,
-            ToggleType = MenuItemToggleType.Radio,
-            GroupName = groupName,
-            IsChecked = isChecked
-        };
-        item.Click += (_, _) => action();
         return item;
     }
 
@@ -641,6 +785,7 @@ public class PickerWindow : Window
     protected override void OnClosed(EventArgs e)
     {
         _holdTimer.Stop();
+        _flashTimer?.Stop();
         _menu?.Hide();
         _topmost?.Dispose();
         base.OnClosed(e);
