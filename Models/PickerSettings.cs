@@ -78,10 +78,12 @@ public class PickerSettings
     /// </summary>
     /// <remarks>
     /// 打开摄像头要 200 ms ~ 1.5 s，首帧还要再等一会儿；开着的时候每帧只要几十毫秒。
-    /// 所以抽完不马上关，连着抽就几乎是瞬时的。代价是这期间摄像头指示灯亮着，
-    /// 到点会自动关掉。设成 0 表示用完立刻关。
+    /// 调大可以让连着抽几乎是瞬时的，代价是这期间摄像头指示灯亮着、摄像头被占着。
+    /// <para/>
+    /// <b>默认 0，用完立刻关</b>：教室大屏上的 Alesco 班级（看班）也要用同一个摄像头。
+    /// 只改默认值，已经存进 settings.json 的值照旧生效。
     /// </remarks>
-    public int CameraKeepAliveSeconds { get; set; } = 120;
+    public int CameraKeepAliveSeconds { get; set; }
 
     /// <summary>
     /// 人脸分数阈值。越低找得越多，也越容易把花纹认成脸。

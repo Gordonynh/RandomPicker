@@ -108,7 +108,8 @@ public partial class PickerSettingsPage : SettingsPageBase, INotifyPropertyChang
         : $"{Settings.CameraKeepAliveSeconds} 秒";
 
     public string KeepAliveSummary =>
-        "开启摄像头约需一两秒，保持开启可加快连续抽取。期间指示灯常亮，超时自动关闭。" +
+        "默认用后即关。保持开启可加快连续抽取，但期间指示灯常亮、摄像头被占用；" +
+        "超时自动关闭，看班需要摄像头时立即关闭。" +
         (CameraPicker.IsWarm ? "\n当前:已开启。" : "\n当前:未开启。");
 
     #endregion

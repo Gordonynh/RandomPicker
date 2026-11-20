@@ -61,6 +61,9 @@ public class PickerHostService : IHostedService
         _settings = PickerSettings.Load(_settingsPath);
         _roster = new RosterService(_rosterPath);
 
+        // Alesco 班级要用摄像头时会发信号，收到就让出来。
+        AlescoCameraSignal.Start();
+
         // 宿主启动 IHostedService 的时候 Avalonia 主窗口不一定已经就绪，
         // 用 Background 优先级排队，等 UI 空下来再开窗口。
         Dispatcher.UIThread.Post(ShowPickerWindow, DispatcherPriority.Background);
@@ -77,6 +80,7 @@ public class PickerHostService : IHostedService
             _window = null;
         });
         _roster?.Dispose();
+        AlescoCameraSignal.Stop();
         // 摄像头可能还热着，一定要关掉，否则指示灯会一直亮。
         return CameraPicker.DisposeAllAsync();
     }
@@ -141,11 +145,18 @@ public class PickerHostService : IHostedService
     /// <remarks>
     /// 整个过程要一两秒，全程在后台线程上跑，UI 只负责显示忙碌态。
     /// 检测不到人脸就退回按名单抽，并在卡片上说明原因——静默失败比抽错人更让人摸不着头脑。
+    /// 摄像头正让给 Alesco 班级（看班）时同样退回名单，不去抢摄像头。
     /// </remarks>
     private void PickFromPhoto()
     {
         if (_shooting)
         {
+            return;
+        }
+
+        if (CameraPicker.IsYielding)
+        {
+            PickFromRoster(YieldNote);
             return;
         }
 
@@ -170,10 +181,15 @@ public class PickerHostService : IHostedService
                 }
 
                 // 拍不到 / 认不出来就退回名单，但要把原因说清楚。
-                PickFromRoster($"拍照失败:{result.Message}，已改为按名单抽取");
+                PickFromRoster(result.Yielded
+                    ? YieldNote
+                    : $"拍照失败:{result.Message}，已改为按名单抽取");
             });
         });
     }
+
+    /// <summary>摄像头让给看班时，退回名单抽取附带的说明。</summary>
+    private const string YieldNote = "摄像头正被看班使用，已改为按名单抽取";
 
     /// <summary>
     /// 文字抽选用的名单。

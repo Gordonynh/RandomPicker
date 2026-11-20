@@ -47,6 +47,12 @@ public sealed class ShotResult
     /// <summary>摄像头是不是本来就热着（省掉了打开的那一两秒）。</summary>
     public bool WasWarm { get; init; }
 
+    /// <summary>是否以共享模式打开（和看班等其他程序同时读取画面）。</summary>
+    public bool Shared { get; init; }
+
+    /// <summary>摄像头正让给 Alesco 班级使用，本次没有拍摄。</summary>
+    public bool Yielded { get; init; }
+
     /// <summary>抽中那个人的人像。</summary>
     public Bitmap? Portrait { get; init; }
 
@@ -55,7 +61,8 @@ public sealed class ShotResult
 
     public string Diagnostics =>
         $"画面 {FrameWidth}×{FrameHeight}，检测到 {FaceCount} 人，用时 {TotalMs / 1000.0:F1} 秒" +
-        (WasWarm ? "（摄像头已开启）" : $"（其中开摄像头 {OpenMs / 1000.0:F1} 秒）");
+        (WasWarm ? "（摄像头已开启）" : $"（其中开摄像头 {OpenMs / 1000.0:F1} 秒）") +
+        (Shared ? "，共享模式" : string.Empty);
 }
 
 /// <summary>
@@ -67,9 +74,15 @@ public sealed class ShotResult
 /// （虚拟/转接摄像头只有预览流），拍照接口一律抛异常——老版本「拍不出照」就是这个原因。
 /// 预览流这条路三个都能用，而且一次性建好之后<b>每帧只要 3~43 ms</b>。
 /// <para/>
-/// <b>摄像头保持热着。</b>打开一次要 200 ms ~ 1.5 s，首帧还要再等一会儿；
-/// 抽完一次之后维持一段时间（默认 2 分钟）不关，连着抽就几乎是瞬时的。
-/// 代价是这期间摄像头指示灯亮着，所以到时间会自动关掉。
+/// <b>先共享、后独占。</b>先以 <see cref="MediaCaptureSharingMode.SharedReadOnly"/> 打开，
+/// 这样教室大屏上的 Alesco 班级正在用摄像头时也能读到画面；共享打不开或取不到帧，
+/// 才退回独占模式。共享模式下不能改分辨率，用的是摄像头当前的格式。
+/// <para/>
+/// <b>默认用完即关。</b>抽完一次可以让摄像头再开一段时间，连着抽几乎是瞬时的，
+/// 但默认不保持（<see cref="PickerSettings.CameraKeepAliveSeconds"/> = 0），以免占着摄像头。
+/// <para/>
+/// <b>给 Alesco 班级让路。</b>Alesco 要用摄像头时会发信号（见 <see cref="AlescoCameraSignal"/>），
+/// 收到后立即关闭，并在 <see cref="YieldDuration"/> 内拒绝再打开。
 /// </remarks>
 internal static class CameraPicker
 {
@@ -87,11 +100,26 @@ internal static class CameraPicker
     private static DateTime _lastUsed = DateTime.MinValue;
     private static Timer? _idleTimer;
 
+    /// <summary>当前这次是不是以共享模式打开的。</summary>
+    private static bool _openShared;
+
     private static FaceModel? _model;
     private static string? _modelError;
 
+    /// <summary>收到 Alesco 班级的信号后，多长时间内不再打开摄像头。</summary>
+    public static readonly TimeSpan YieldDuration = TimeSpan.FromSeconds(60);
+
+    /// <summary>让路期间拍照时给出的提示。</summary>
+    public const string YieldMessage = "摄像头正被看班使用，请稍后再试";
+
+    /// <summary>让路截止时间（UTC 刻度）。多线程读写，一律走 <see cref="Volatile"/>。</summary>
+    private static long _yieldUntilTicks;
+
     /// <summary>摄像头当前是不是开着的。设置页里显示用。</summary>
     public static bool IsWarm => _capture is not null;
+
+    /// <summary>是否正在给 Alesco 班级让路（这期间不打开摄像头）。</summary>
+    public static bool IsYielding => DateTime.UtcNow.Ticks < Volatile.Read(ref _yieldUntilTicks);
 
     /// <summary>系统里有哪些摄像头。</summary>
     public static async Task<List<CameraDevice>> ListCamerasAsync()
@@ -120,10 +148,16 @@ internal static class CameraPicker
         await Gate.WaitAsync();
         try
         {
+            // 在锁里判断：让路信号可能正好在排队等锁的时候到。
+            if (IsYielding)
+            {
+                return new ShotResult { Success = false, Yielded = true, Message = YieldMessage };
+            }
+
             var clock = Stopwatch.StartNew();
             var wasWarm = _capture is not null && _openDeviceId == ResolveWantedId(settings);
 
-            if (!await EnsureCameraAsync(settings))
+            if (!await EnsureCameraAsync(settings, allowShared: true))
             {
                 return Fail("未检测到摄像头，或系统未允许访问相机");
             }
@@ -132,11 +166,25 @@ internal static class CameraPicker
 
             clock.Restart();
             var frame = await GrabFrameAsync();
+
+            // 共享模式打开了却取不到帧：退回独占模式再试一次。
+            if (frame is null && _openShared)
+            {
+                if (!await EnsureCameraAsync(settings, allowShared: false))
+                {
+                    return Fail("未检测到摄像头，或系统未允许访问相机");
+                }
+
+                frame = await GrabFrameAsync();
+            }
+
             var captureMs = clock.ElapsedMilliseconds;
             if (frame is null)
             {
                 return Fail("摄像头无画面");
             }
+
+            var shared = _openShared;
 
             var (pixels, width, height) = frame.Value;
             Touch(settings);
@@ -162,7 +210,8 @@ internal static class CameraPicker
                     FrameHeight = height,
                     OpenMs = openMs,
                     CaptureMs = captureMs,
-                    WasWarm = wasWarm
+                    WasWarm = wasWarm,
+                    Shared = shared
                 };
             }
 
@@ -183,6 +232,7 @@ internal static class CameraPicker
                     CaptureMs = captureMs,
                     DetectMs = detectMs,
                     WasWarm = wasWarm,
+                    Shared = shared,
                     Annotated = annotated
                 };
             }
@@ -201,6 +251,7 @@ internal static class CameraPicker
                 CaptureMs = captureMs,
                 DetectMs = detectMs,
                 WasWarm = wasWarm,
+                Shared = shared,
                 Portrait = portrait,
                 Annotated = annotated
             };
@@ -224,10 +275,13 @@ internal static class CameraPicker
         string.IsNullOrEmpty(settings.CameraDeviceId) ? null : settings.CameraDeviceId;
 
     /// <summary>摄像头没开就开，开着的就直接用。</summary>
-    private static async Task<bool> EnsureCameraAsync(PickerSettings settings)
+    /// <param name="settings">插件设置。</param>
+    /// <param name="allowShared">先试共享模式；为 false 时只用独占模式（共享模式取不到帧时的重试）。</param>
+    private static async Task<bool> EnsureCameraAsync(PickerSettings settings, bool allowShared)
     {
         var wanted = ResolveWantedId(settings);
-        if (_capture is not null && _reader is not null && _openDeviceId == wanted)
+        if (_capture is not null && _reader is not null && _openDeviceId == wanted &&
+            (allowShared || !_openShared))
         {
             return true;
         }
@@ -242,48 +296,92 @@ internal static class CameraPicker
 
         var device = cameras.FirstOrDefault(x => x.Id == settings.CameraDeviceId) ?? cameras[0];
 
-        var capture = new MediaCapture();
-        await capture.InitializeAsync(new MediaCaptureInitializationSettings
+        if (allowShared)
         {
-            VideoDeviceId = device.Id,
-            StreamingCaptureMode = StreamingCaptureMode.Video,
-            MemoryPreference = MediaCaptureMemoryPreference.Cpu
-        });
+            try
+            {
+                if (await OpenAsync(device, MediaCaptureSharingMode.SharedReadOnly))
+                {
+                    _openDeviceId = wanted;
+                    return true;
+                }
+            }
+            catch (Exception)
+            {
+                // 共享模式不受支持（部分虚拟摄像头、老驱动），退回独占。
+            }
+        }
 
-        var source = capture.FrameSources.Values
-            .FirstOrDefault(x => x.Info.SourceKind == MediaFrameSourceKind.Color);
-        if (source is null)
+        if (!await OpenAsync(device, MediaCaptureSharingMode.ExclusiveControl))
         {
-            capture.Dispose();
             return false;
         }
 
-        // 分辨率直接决定远处的小脸还剩几个像素，所以尽量取高的；
-        // 但过了 2560 宽之后，多出来的像素在缩到 640×640 时全被扔掉，只是白白拖慢取帧。
-        var format = source.SupportedFormats
-            .Where(f => f.VideoFormat.Width <= 2560 && f.VideoFormat.Height <= 2560)
-            .OrderByDescending(f => (long)f.VideoFormat.Width * f.VideoFormat.Height)
-            .ThenBy(f => f.Subtype.Equals("NV12", StringComparison.OrdinalIgnoreCase) ? 0 : 1)
-            .FirstOrDefault();
-        if (format is not null)
-        {
-            await source.SetFormatAsync(format);
-        }
-
-        var reader = await capture.CreateFrameReaderAsync(source, MediaEncodingSubtypes.Bgra8);
-        reader.AcquisitionMode = MediaFrameReaderAcquisitionMode.Realtime;
-        var status = await reader.StartAsync();
-        if (status != MediaFrameReaderStartStatus.Success)
-        {
-            reader.Dispose();
-            capture.Dispose();
-            return false;
-        }
-
-        _capture = capture;
-        _reader = reader;
         _openDeviceId = wanted;
         return true;
+    }
+
+    /// <summary>按指定的共享方式打开摄像头并开始读帧。成功时填好 <see cref="_capture"/> 和 <see cref="_reader"/>。</summary>
+    private static async Task<bool> OpenAsync(CameraDevice device, MediaCaptureSharingMode mode)
+    {
+        var shared = mode == MediaCaptureSharingMode.SharedReadOnly;
+        var capture = new MediaCapture();
+        MediaFrameReader? reader = null;
+        try
+        {
+            await capture.InitializeAsync(new MediaCaptureInitializationSettings
+            {
+                VideoDeviceId = device.Id,
+                SharingMode = mode,
+                StreamingCaptureMode = StreamingCaptureMode.Video,
+                MemoryPreference = MediaCaptureMemoryPreference.Cpu
+            });
+
+            var source = capture.FrameSources.Values
+                .FirstOrDefault(x => x.Info.SourceKind == MediaFrameSourceKind.Color);
+            if (source is null)
+            {
+                capture.Dispose();
+                return false;
+            }
+
+            // 分辨率直接决定远处的小脸还剩几个像素，所以尽量取高的；
+            // 但过了 2560 宽之后，多出来的像素在缩到 640×640 时全被扔掉，只是白白拖慢取帧。
+            // 共享模式没有改格式的权限，只能用摄像头当前的格式。
+            if (!shared)
+            {
+                var format = source.SupportedFormats
+                    .Where(f => f.VideoFormat.Width <= 2560 && f.VideoFormat.Height <= 2560)
+                    .OrderByDescending(f => (long)f.VideoFormat.Width * f.VideoFormat.Height)
+                    .ThenBy(f => f.Subtype.Equals("NV12", StringComparison.OrdinalIgnoreCase) ? 0 : 1)
+                    .FirstOrDefault();
+                if (format is not null)
+                {
+                    await source.SetFormatAsync(format);
+                }
+            }
+
+            reader = await capture.CreateFrameReaderAsync(source, MediaEncodingSubtypes.Bgra8);
+            reader.AcquisitionMode = MediaFrameReaderAcquisitionMode.Realtime;
+            var status = await reader.StartAsync();
+            if (status != MediaFrameReaderStartStatus.Success)
+            {
+                reader.Dispose();
+                capture.Dispose();
+                return false;
+            }
+
+            _capture = capture;
+            _reader = reader;
+            _openShared = shared;
+            return true;
+        }
+        catch (Exception)
+        {
+            reader?.Dispose();
+            capture.Dispose();
+            throw;
+        }
     }
 
     /// <summary>抓一帧。刚开机时前几帧可能是空的，要等一等。</summary>
@@ -377,6 +475,37 @@ internal static class CameraPicker
         _capture?.Dispose();
         _capture = null;
         _openDeviceId = null;
+        _openShared = false;
+    }
+
+    /// <summary>
+    /// Alesco 班级要用摄像头：立即关闭，并在 <see cref="YieldDuration"/> 内不再打开。
+    /// </summary>
+    /// <remarks>
+    /// 截止时间在进锁之前就设好，排队等锁的拍照请求进锁后会直接放弃；
+    /// 正在进行的那一次拍完才能关（读帧时不能抽掉摄像头），通常只要一两秒。
+    /// 连续收到信号会顺延截止时间。
+    /// </remarks>
+    public static async Task YieldToAlescoAsync()
+    {
+        Volatile.Write(ref _yieldUntilTicks, (DateTime.UtcNow + YieldDuration).Ticks);
+
+        try
+        {
+            await Gate.WaitAsync();
+            try
+            {
+                await ShutdownCameraAsync();
+            }
+            finally
+            {
+                Gate.Release();
+            }
+        }
+        catch (Exception)
+        {
+            // 关不掉也不能把监听线程带崩；截止时间已经生效，不会再打开。
+        }
     }
 
     /// <summary>插件停止时调用：关摄像头、放掉模型。</summary>
